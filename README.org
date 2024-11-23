@@ -1,0 +1,7 @@
+#+title: A Path type for Base Julia
+
+This is part of the [[https://hackmd.io/@tecosaur/SyMYFLhG1g][Charting a Path for Julia]] proposal.
+
+Currently, this is both a prototype and an experiment. Some parts I am confident
+will be part of the final proposal (e.g. ~AbstractPath~), others components are
+being tried so that we can evaluate whether they're worth having (e.g. path buffers).
