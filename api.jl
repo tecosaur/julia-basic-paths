@@ -61,7 +61,10 @@ Return the terminal component of `path`.
 function basename end
 
 # AbstractPath API: optional methods
-
+# Is this correct? Windows apparently operates with distinct drive prefixes
+# and roots, see https://doc.rust-lang.org/src/std/path.rs.html#2247
+# Also https://doc.rust-lang.org/std/path/struct.Path.html#method.is_absolute
+# Maybe it's a good idea to separate has_root and is_absolute.
 """
     isabsolute(path::AbstractPath) -> Bool
 
@@ -72,9 +75,16 @@ Return `true` if `path` is absolute, `false` otherwise.
 """
 isabsolute(path::AbstractPath) = !isnothing(root(path))
 
+# I don't think we should support indexing when it's not O(1).
+# Similar to how strings have byte-based indexing because it does not
+# support O(1) character-based.
 Base.firstindex(::AbstractPath) = 1
+
+# This too should not be O(N).
 Base.lastindex(path::AbstractPath) = length(path)
 
+# This is equivalent to the proposed Iterators.nth function. Let's keep
+# it `nth`
 function Base.getindex(path::AbstractPath, i::Int)
     i < firstindex(path) && throw(BoundsError(i))
     val, itr = iterate(path)
@@ -130,6 +140,10 @@ parentsegment(::Type{<:PlainPath}) -> String
 """
 abstract type PlainPath <: AbstractPath{SubString{String}} end
 
+# This API will not work, because Windows have both / and \ as separators.
+# Instead, maybe divide it into a "primary separator" function, which
+# for Windows returns '\\', and an "is separator" function that returns `true`
+# for both / and \
 """
     separator(::Type{<:PlainPath}) -> Char
     separator(::PlainPath) -> Char

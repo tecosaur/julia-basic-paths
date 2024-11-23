@@ -5,6 +5,9 @@
 
 struct GenericPlainPathBuf{P <: PlainPath} <: PlainPath
     data::Vector{UInt8}
+    # I don't think this is actually necessary - but I may be repeating myself.
+    # It'll just double the amount of allocations, when the separators can quickly
+    # be found in the data itself.
     separators::Vector{UInt16}
 end
 
@@ -13,6 +16,8 @@ function root(path::GenericPlainPathBuf{P}) where {P <: PlainPath}
     rootlen = first(path.separators)
     rootlen == 0 && return nothing
     rootdata = path.data[1:rootlen+1]
+    # This is interesting. What's the purpose of appending a 0x00 byte here?
+    # For C operability? Maybe that makes sense.
     rootdata[end] = 0x00
     GenericPlainPathBuf{P}(rootdata, [rootlen])
 end
@@ -87,7 +92,10 @@ Base.string(path::GenericPlainPathBuf) = String(path.data[1:end-1])
 
 function Base.push!(path::GenericPlainPathBuf{P}, segment::AbstractString) where {P}
     if segment == selfsegment(P)
+        # Normally, `push!` returns the first argument.
         return
+    # This is not correct: If `b` is a symlink, then `/a/b/..` is not `/a`.
+    # See e.g. https://doc.rust-lang.org/src/std/path.rs.html#2763
     elseif segment == parentsegment(P)
         pop!(path)
         return
