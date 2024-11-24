@@ -1,6 +1,28 @@
 # Implementation of the `GenericPlainPathBuf` type and its methods.
 
-# This is an optional complement to the `GenericPlainPath`
+# Extension of the `AbstractPath` API we may want to consider
+# that makes more sense if we want efficient mutation.
+
+Base.firstindex(::AbstractPath) = 1
+Base.lastindex(path::AbstractPath) = length(path)
+
+function Base.getindex(path::AbstractPath, i::Int)
+    i < firstindex(path) && throw(BoundsError(i))
+    val, itr = iterate(path)
+    while (i -= 1) > 0
+        next = iterate(path, itr)
+        isnothing(next) && throw(BoundsError(i))
+    end
+    val
+end
+
+Base.checkbounds(::Type{Bool}, ap::AbstractPath, i::Int) =
+    firstindex(ap) <= i <= lastindex(ap)
+
+Base.checkbounds(ap::AbstractPath, i::Int) =
+    if !checkbounds(Bool, ap, i) throw(BoundsError(ap, i)) end
+
+# Buffer type: this is an optional complement to the `GenericPlainPath`
 # type that allows for efficient mutation using a path buffer.
 
 struct GenericPlainPathBuf{P <: PlainPath} <: PlainPath
@@ -20,14 +42,14 @@ end
 isabsolute(path::GenericPlainPathBuf) =
     !isempty(path.separators) && !iszero(first(path.separators))
 
-function parent(path::GenericPlainPathBuf{P}) where {P <: PlainPath}
+function Base.parent(path::GenericPlainPathBuf{P}) where {P <: PlainPath}
     isempty(path.separators) && return nothing
     parentdata = path.data[1:last(path.separators)]
     parentdata[end] = 0x00
     GenericPlainPathBuf{P}(parentdata, path.separators[1:end-1])
 end
 
-function basename(path::GenericPlainPathBuf{P}) where {P <: PlainPath}
+function Base.basename(path::GenericPlainPathBuf{P}) where {P <: PlainPath}
     if isempty(path.separators) ||iszero(first(path.separators))
         SubString(String(copy(path.data)))
     else
@@ -81,14 +103,14 @@ end
 
 separator(::Type{GenericPlainPathBuf{P}}) where {P <: PlainPath} = separator(P)
 
-Base.string(path::GenericPlainPathBuf) = String(path.data[1:end-1])
+Base.String(path::GenericPlainPathBuf) = String(path.data[1:end-1])
 
 # Path buffer specific methods
 
 function Base.push!(path::GenericPlainPathBuf{P}, segment::AbstractString) where {P}
-    if segment == selfsegment(P)
+    if segment == pseudoself(P)
         return
-    elseif segment == parentsegment(P)
+    elseif segment == pseudoparent(P)
         pop!(path)
         return
     end
@@ -96,7 +118,7 @@ function Base.push!(path::GenericPlainPathBuf{P}, segment::AbstractString) where
     path.data[end] = separatorbyte(P)
     append!(path.data, codeunits(segment))
     push!(path.data, 0x00)
-    nothing
+    segment
 end
 
 function Base.pop!(path::GenericPlainPathBuf)
@@ -184,7 +206,9 @@ function generic_rewrap(f::F, path::PlainPath) where {F <: Function}
     else
         throw(ArgumentError("Unsupported path type: $(typeof(path))"))
     end
-    P(f(gp))
+    fp = f(gp)
+    isnothing(fp) && return
+    P(fp)
 end
 
 function Base.:(*)(a::PlainPath, b::PlainPath)

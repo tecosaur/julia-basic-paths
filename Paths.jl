@@ -1,15 +1,17 @@
 module Paths
 
-export AbstractPath, root, parent, basename, isabsolute
+# Abstract API
+export root, isabsolute # `parents` and `basename` are already in `Base`
 
-export PlainPath, SystemPath, PosixPath, WindowsPath, Path,
+export PosixPath, WindowsPath, Path,
     PosixPathBuf, WindowsPathBuf, PathBuf, @p_str
 
-public separator
+public AbstractPath, PlainPath, SystemPath, separator
 
-include("api.jl")
+include("abstractpaths.jl")
 include("path.jl")
 include("pathbuf.jl")
-include("system-paths.jl")
+include("system.jl")
+include("filesystem.jl")
 
 end

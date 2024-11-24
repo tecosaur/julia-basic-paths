@@ -7,6 +7,8 @@ describe a location.
 This can be thought of as an analogue of `Vector{T}`, with extra semantics, an
 in fact can be iterated over and `collect`ed into a `Vector{T}` .
 
+See also: [`PlainPath`](@ref).
+
 # Interface
 
 ```
@@ -23,9 +25,6 @@ from the base interface:
 
 ```
 isabsolute(path::AbstractPath{T}) -> Bool
-getindex(path::AbstractPath{T}, i::Int) -> T
-firstindex(path::AbstractPath{T}) -> Int
-lastindex(path::AbstractPath{T}) -> Int
 ```
 """
 abstract type AbstractPath{T} end
@@ -40,25 +39,25 @@ Return the root of the `path`, if it exists.
 """
 function root end
 
-"""
+@doc """
     parent(path::AbstractPath{T}) -> Union{AbstractPath{T}, Nothing}
 
 Return the immediate parent of `path`, if it exists.
 
 !!! note
      Part of the [`AbstractPath`](@ref) interface.
-"""
-function parent end
+""" Base.parent
 
-"""
+@doc """
     basename(path::AbstractPath{T}) -> T
 
 Return the terminal component of `path`.
 
 !!! note
      Part of the [`AbstractPath`](@ref) interface.
-"""
-function basename end
+""" Base.basename
+
+Base.eltype(::Type{AbstractPath{T}}) where {T} = T
 
 # AbstractPath API: optional methods
 
@@ -71,25 +70,6 @@ Return `true` if `path` is absolute, `false` otherwise.
      Optional component of the [`AbstractPath`](@ref) interface.
 """
 isabsolute(path::AbstractPath) = !isnothing(root(path))
-
-Base.firstindex(::AbstractPath) = 1
-Base.lastindex(path::AbstractPath) = length(path)
-
-function Base.getindex(path::AbstractPath, i::Int)
-    i < firstindex(path) && throw(BoundsError(i))
-    val, itr = iterate(path)
-    while (i -= 1) > 0
-        next = iterate(path, itr)
-        isnothing(next) && throw(BoundsError(i))
-    end
-    val
-end
-
-Base.checkbounds(::Type{Bool}, ap::AbstractPath, i::Int) =
-    firstindex(ap) <= i <= lastindex(ap)
-
-Base.checkbounds(ap::AbstractPath, i::Int) =
-    if !checkbounds(Bool, ap, i) throw(BoundsError(ap, i)) end
 
 # ---------------------
 # PlainPath + generic implementation
@@ -105,10 +85,10 @@ character, and no more than $(2^16 - 1) bytes long.
 
 ```
 separator(::Type{<:PlainPath}) -> Char
-string(path::PlainPath) -> String
+String(path::PlainPath) -> String
 ```
 
-You can skip implementing the `string` method if you implement
+You can skip implementing the `String` method if you implement
 the generic backed methods:
 
 ```
@@ -117,15 +97,15 @@ T(path::GenericPlainPath{T}) -> T
 T(path::GenericPlainPathBuf{T}) -> T
 ```
 
-By implementing these methods, the [`AbstractPath`](@ref) iterface is also
+By implementing these methods, the [`AbstractPath`](@ref) interface is also
 implemented by fallback `PlainPath` methods that assume generic backing.
 Otherwise, you must implement the `AbstractPath` interface.
 
 Optionally, a `PlainPath` can be extended with the concept of self and parent
 reference segments:
 ```
-selfsegment(::Type{<:PlainPath}) -> String
-parentsegment(::Type{<:PlainPath}) -> String
+pseudoself(::Type{<:PlainPath}) -> String
+pseudoparent(::Type{<:PlainPath}) -> String
 ```
 """
 abstract type PlainPath <: AbstractPath{SubString{String}} end
@@ -153,3 +133,80 @@ Return the separator byte used in paths of the given type.
      of [`PlainPath`](@ref), and is not intended for general use.
 """
 separatorbyte(::Type{TP}) where {TP <: PlainPath} = UInt8(separator(TP))
+
+"""
+    pseudoself(::Type{<:PlainPath}) -> Union{String, Nothing}
+
+Return the self-reference segment for paths of the given type, if it exists.
+"""
+pseudoself(::Type{<:PlainPath}) = nothing
+
+"""
+    pseudoparent(::Type{<:PlainPath}) -> Union{String, Nothing}
+
+Return the parent-reference segment for paths of the given type, if it exists.
+"""
+pseudoparent(::Type{<:PlainPath}) = nothing
+
+# Exceptions
+
+abstract type PathException{T} <: Exception end
+
+struct InsufficientParents{T <: AbstractPath} <: PathException{T}
+    path::T
+    needed::Int
+end
+
+function Base.showerror(io::IO, e::InsufficientParents{T}) where {T}
+    nth(n::Int) = if n % 10 == 1
+        "st"
+    elseif n % 10 == 2
+        "nd"
+    elseif n % 10 == 3
+        "rd"
+    else "th" end
+    if e.needed == 1
+        print(io, "Tried to acquire the parent of a path with no parent: $(string(e.path)).")
+    else
+        print(io, "Tried to acquire the $(e.needed)$(nth(e.needed)) parent of the path $(string(e.path)), which only has $(length(e.path)-1) parents.")
+    end
+end
+
+struct EmptyPath{T <: AbstractPath} <: PathException{T} end
+
+struct InvalidSegment{T <: PlainPath} <: PathException{T}
+    segment::String
+    issue::Symbol
+    particular::Union{Nothing, Char, String}
+    InvalidSegment{T}(segment::AbstractString, issue::Symbol, particular::Union{Nothing, Char, String}) where {T <: PlainPath} =
+        new{T}(String(segment), issue, particular)
+end
+
+InvalidSegment{T}(segment, issue) where {T <: PlainPath} =
+    InvalidSegment{T}(segment, issue, nothing)
+
+function Base.showerror(io::IO, e::InvalidSegment{T}) where {T}
+    description = if e.issue == :empty
+        "is empty"
+    elseif e.issue == :reserved
+        "is reserved"
+    elseif e.issue == :separator
+        "contains the separator character"
+    elseif e.issue == :suffix
+        "cannot end with the character"
+    elseif e.issue == :char
+        "contains the reserved character"
+    else
+        "is invalid"
+    end
+    print(io, "Invalid segment in $T: ")
+    show(io, e.segment)
+    print(io, ' ', description)
+    if isnothing(e.particular)
+        print(io, '.')
+    else
+        print(io, ' ')
+        show(io, e.particular)
+        print(io, '.')
+    end
+end
