@@ -378,21 +378,29 @@ macro p_str(raw_path::String, flags...)
         throw(ArgumentError("~user tilde expansion not implemented"))
     end
     escaped = false
-    function makecomponent(val::Union{Expr, Symbol, String})
+    function makecomponent(prefix::String, val::Union{Expr, Symbol, String, Char}, suffix::String)
         var = gensym("path#segment")
+        perr = if !isempty(prefix)
+            :(throw(ArgumentError("Cannot concatenate path with a string prefix")))
+        end
+        serr = if !isempty(suffix)
+            :(throw(ArgumentError("Cannot concatenate path with a string suffix")))
+        end
         quote
             let $var = $(esc(val))
-                if $var isa $pathkind
+                if $var isa AbstractString || $var isa AbstractChar
+                    $pathkind($prefix * validate_path($pathkind, String(string($var)), false) * $suffix)
+                elseif $var isa $pathkind
+                    $perr
+                    $serr
                     $var
-                elseif $var isa AbstractString
-                    $pathkind(validate_path($pathkind, $var))
                 else
-                    $pathkind($var)
+                    throw(ArgumentError("Invalid path component type: $var of type $(typeof($var)), should be an AbstractString or Path"))
                 end
             end
         end
     end
-    makecomponent(val) =
+    makecomponent(::String, val, ::String) =
         throw(ArgumentError("Invalid path component type: $val of type $(typeof(val))"))
     while idx < ncodeunits(path)
         if escaped
@@ -402,13 +410,26 @@ macro p_str(raw_path::String, flags...)
             escaped = true
             idx += 1
         elseif path[idx] == '$'
+            prefix, suffix = "", ""
             if lastidx < idx
-                text = path[lastidx:prevind(path, idx)]
-                push!(components, parse(pathkind, text))
+                pidx = if path[prevind(path, idx)] != '/'
+                    segstart = something(findprev(==('/'), path, idx), 0)
+                    prefix = path[segstart+1:prevind(path, idx)]
+                    segstart
+                else idx end
+                if lastidx < pidx
+                    text = path[lastidx:prevind(path, pidx)]
+                    push!(components, parse(pathkind, text))
+                end
             end
             idx += ncodeunits('$')
             expr, idx = Meta.parseatom(path, idx; filename=string(__source__.file))
-            push!(components, makecomponent(expr))
+            if idx < ncodeunits(path) && nextind(path, idx) < ncodeunits(path) && path[idx] != '/'
+                sidx = something(findnext(==('/'), path, idx), lastindex(path) + 1)
+                suffix = path[idx:prevind(path, sidx)]
+                idx = sidx
+            end
+            push!(components, makecomponent(prefix, expr, suffix))
             if idx < ncodeunits(path) && path[idx] == separator(pathkind)
                 idx += 1
             end
