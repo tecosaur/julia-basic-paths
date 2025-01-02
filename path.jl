@@ -59,8 +59,17 @@ function Base.iterate(path::GenericPlainPath{P}, start::Int) where {P}
     SubString(path.data, start, stop, Val(:noshift)), nextstart
 end
 
+struct AbsolutePathError{P <: GenericPlainPath} <: Exception
+    a::P
+    b::P
+end
+
+function Base.showerror(io::IO, ex::AbsolutePathError)
+    print(io, "AbsolutePathError: Cannot join one path ($(ex.a.data)) with an absolute path ($(ex.b.data))")
+end
+
 Base.@assume_effects :foldable function Base.:(*)(a::GenericPlainPath{P}, b::GenericPlainPath{P}) where {P}
-    isabsolute(b) && return b
+    isabsolute(b) && throw(AbsolutePathError(a, b))
     simplejoin = isnothing(pseudoparent(P)) ||
         (iszero(b.lastsep) && b.data != pseudoparent(P)) ||
         (ncodeunits(b.data) > ncodeunits(pseudoparent(P)) &&
