@@ -437,7 +437,8 @@ macro p_str(raw_path::String, flags...)
             idx = nextind(path, idx)
         end
     end
-    if lastidx <= lastindex(path)
+    if lastidx > 1 && lastidx == lastindex(path) && path[lastidx] == '/'
+    elseif lastidx <= lastindex(path)
         push!(components, parse(pathkind, path[lastidx:end]))
     end
     if length(components) == 1
