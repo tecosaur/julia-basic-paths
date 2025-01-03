@@ -70,64 +70,117 @@ end
 
 Base.@assume_effects :foldable function Base.:(*)(a::GenericPlainPath{P}, b::GenericPlainPath{P}) where {P}
     isabsolute(b) && throw(AbsolutePathError(a, b))
-    simplejoin = isnothing(pseudoparent(P)) ||
-        (iszero(b.lastsep) && b.data != pseudoparent(P)) ||
-        (ncodeunits(b.data) > ncodeunits(pseudoparent(P)) &&
-         !(view(codeunits(b.data), 1:ncodeunits(pseudoparent(P))) == codeunits(pseudoparent(P)) &&
-           codeunit(b.data, ncodeunits(pseudoparent(P)) + 1) == separatorbyte(P)))
-    if simplejoin
-        cdata = a.data * separator(P) * b.data
-        lastsep = ncodeunits(a.data) + b.lastsep + 1
-        GenericPlainPath{P}(cdata, a.rootsep, lastsep)
-    else # Worry about leading `pseudoparent` components in `b`
-        abytes, bbytes = codeunits(a.data), codeunits(b.data)
-        aend = ncodeunits(a.data)
-        bstart = 1
-        bsegend = something(findnext(==(separatorbyte(P)), bbytes, bstart),
-                            length(bbytes) + 1) - 1
-        while true
-            if view(bbytes, bstart:bsegend) == codeunits(pseudoparent(P))
-                if aend > a.rootsep
-                    aprev = something(findprev(==(separatorbyte(P)), abytes, aend), 1)
-                    aend = aprev - 1
-                elseif iszero(a.rootsep)
-                    aend -= 1
-                else
-                    throw(InsufficientParents(a, count(==(pseudoparent(P)), collect(b))))
-                end
-                bstart = bsegend + 2
-                bsegend = something(findnext(==(separatorbyte(P)), bbytes, min(length(bbytes), bstart)),
-                                    length(bbytes) + 1) - 1
-            elseif view(bbytes, bstart:bsegend) == codeunits(pseudoself(P))
-                bstart = bsegend + 2
-                bsegend = something(findnext(==(separatorbyte(P)), bbytes, min(length(bbytes), bstart)),
-                                    length(bbytes) + 1) - 1
-            else
-                break
-            end
-        end
-        cdata = if aend > 0
-            asub = SubString(a.data, 0, aend, Val(:noshift))
-            if bstart < length(bbytes)
-                asub * separator(P) * SubString(b.data, bstart - 1, length(bbytes) - bstart + 1, Val(:noshift))
-            else
-                asub
-            end
-        elseif aend == 0
-            String(bbytes[bstart:length(bbytes)])
-        else
-            cbytes = UInt8[]
-            sizehint!(cbytes, 3 * aend + length(bbytes) - bstart + 1)
-            for _ in 1:-aend
-                append!(cbytes, codeunits(pseudoparent(P)))
-                push!(cbytes, separatorbyte(P))
-            end
-            append!(cbytes, view(bbytes, bstart:length(bbytes)))
-            String(cbytes)
-        end
-        lastsep = b.lastsep + ncodeunits(cdata) - ncodeunits(b.data)
-        GenericPlainPath{P}(cdata, a.rootsep, lastsep)
+    if a.data == pseudoself(P)
+        return b
+    elseif b.data == pseudoself(P)
+        return a
     end
+    if ispseudopath(b)
+        joinpsudoparent(a, b)
+    else
+        pathconcat(a, b)
+    end
+end
+
+"""
+    ispseudopath(p::GenericPlainPath{P})
+
+Determine whether `p` either:
+- Consists of the pseudoself segment for `P`
+- Consists of the psudoparent segment for `P`
+- Starts with a psudoparent segment and is immediately
+  followed by a separator.
+
+These checks should be sufficient as `GenericPlainPath`s are always represented
+in a normalised form.
+"""
+function ispseudopath(p::GenericPlainPath{P}) where {P}
+    p.data == pseudoself(P) && return true
+    ppar = pseudoparent(P)
+    if isnothing(ppar)
+        false
+    elseif startswith(p.data, ppar)
+        ncodeunits(p.data) == ncodeunits(ppar) ||
+            codeunit(p.daat, ncodeunits(ppar) + 1) == separatorbyte(P)
+    else
+        false
+    end
+end
+
+"""
+    pathconcat(a::GenericPlainPath{P}, b::GenericPlainPath{P})
+
+Join paths `a` and `b` together with the path separator of `P`.
+"""
+function pathconcat(a::GenericPlainPath{P}, b::GenericPlainPath{P}) where {P}
+    cdata = a.data * separator(P) * b.data
+    lastsep = ncodeunits(a.data) + b.lastsep + 1
+    GenericPlainPath{P}(cdata, a.rootsep, lastsep)
+end
+
+"""
+    joinpsudoparent(a::GenericPlainPath{P}, b::GenericPlainPath{P})
+
+Join one path (`a`) with another that starts with one or more pseudo-parent segments.
+"""
+Base.@assume_effects :foldable function joinpsudoparent(a::GenericPlainPath{P}, b::GenericPlainPath{P}) where {P}
+    abytes, bbytes = codeunits(a.data), codeunits(b.data)
+    aend = ncodeunits(a.data)
+    bstart = 1
+    bsegend = something(findnext(==(separatorbyte(P)), bbytes, bstart),
+                        length(bbytes) + 1) - 1
+    # bsegend > 1 || return pathconcat(a, b)
+    while true
+        if view(bbytes, bstart:bsegend) == codeunits(pseudoparent(P))
+            if aend > a.rootsep
+                aprev = something(findprev(==(separatorbyte(P)), abytes, aend), 1)
+                aend = aprev - 1
+            elseif iszero(a.rootsep)
+                aend -= 1
+            else
+                throw(InsufficientParents(a, count(==(pseudoparent(P)), collect(b))))
+            end
+            bstart = bsegend + 2
+            bsegend = something(findnext(==(separatorbyte(P)), bbytes, min(length(bbytes), bstart)),
+                                length(bbytes) + 1) - 1
+        elseif view(bbytes, bstart:bsegend) == codeunits(pseudoself(P))
+            bstart = bsegend + 2
+            bsegend = something(findnext(==(separatorbyte(P)), bbytes, min(length(bbytes), bstart)),
+                                length(bbytes) + 1) - 1
+        else
+            break
+        end
+    end
+    cdata = if aend > 0
+        asub = SubString(a.data, 0, aend, Val(:noshift))
+        if bstart < length(bbytes)
+            asub * separator(P) * SubString(b.data, bstart - 1, length(bbytes) - bstart + 1, Val(:noshift))
+        else
+            asub
+        end
+    elseif aend == 0
+        if bstart > length(bbytes)
+            if a.rootsep > 0
+                String(abytes[1:a.rootsep])
+            else
+                pseudoself(P)
+            end
+        else
+            String(bbytes[bstart:length(bbytes)])
+        end
+    else
+        cbytes = UInt8[]
+        psegsize = ncodeunits(pseudoparent(P)) + 1
+        sizehint!(cbytes, psegsize * -aend + length(bbytes) - bstart + 1)
+        for _ in 1:-aend
+            append!(cbytes, codeunits(pseudoparent(P)))
+            push!(cbytes, separatorbyte(P))
+        end
+        append!(cbytes, view(bbytes, bstart:length(bbytes)))
+        String(cbytes)
+    end
+    lastsep = b.lastsep + max(0, ncodeunits(cdata) - ncodeunits(b.data))
+    GenericPlainPath{P}(cdata, a.rootsep, lastsep)
 end
 
 separator(::Type{GenericPlainPath{P}}) where {P <: PlainPath} = separator(P)
