@@ -170,8 +170,7 @@ Base.@assume_effects :foldable function validate_path(::Type{InvalidSegment{T}},
         InvalidSegment{T}(segment, :reserved)
     elseif segment == ".."
         InvalidSegment{T}(segment, :reserved)
-    end
-    if '\0' in segment
+    elseif '\0' in segment
         InvalidSegment{T}(segment, :char, '\0')
     elseif '/' in segment && !allowsep
         InvalidSegment{T}(segment, :separator, '/')
@@ -227,7 +226,7 @@ Base.@assume_effects :foldable function PosixPath(path::String)
 end
 
 function Base.parse(::Type{PosixPath}, path::String)
-    validate_path(PosixPath, path, true)
+    # validate_path(PosixPath, path, true)
     PosixPath(path)
 end
 
