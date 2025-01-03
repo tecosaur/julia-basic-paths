@@ -389,7 +389,7 @@ macro p_str(raw_path::String, flags...)
         quote
             let $var = $(esc(val))
                 if $var isa AbstractString || $var isa AbstractChar
-                    $pathkind($prefix * validate_path($pathkind, String(string($var)), false) * $suffix)
+                    $pathkind(validate_path($pathkind, $prefix * String(string($var)) * $suffix, false))
                 elseif $var isa $pathkind
                     $perr
                     $serr
