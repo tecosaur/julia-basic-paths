@@ -423,8 +423,8 @@ macro p_str(raw_path::String, flags...)
             end
             idx += ncodeunits('$')
             expr, idx = Meta.parseatom(path, idx; filename=string(__source__.file))
-            if idx < ncodeunits(path) && nextind(path, idx) < ncodeunits(path) && path[idx] != '/'
-                sidx = something(findnext(==('/'), path, idx), lastindex(path) + 1)
+            if idx <= ncodeunits(path) && path[idx] != '/'
+                sidx = something(findnext(==('/'), path, idx), ncodeunits(path) + 1)
                 suffix = path[idx:prevind(path, sidx)]
                 idx = sidx
             end
