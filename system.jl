@@ -388,6 +388,9 @@ macro p_str(raw_path::String, flags...)
         elseif !isempty(suffix)
             :(throw(ArgumentError($"Cannot concatenate path ($val) with a string suffix ($(sprint(show, suffix)))")))
         end
+        vecerr = if !delimorfinal
+            :(throw(ArgumentError($"Path component vector `$val` should be separated from subsequent components with a / separator")))
+        end
         strparts = filter(!isnothing,
                           (if !isempty(prefix) prefix end,
                            :(String(string($var))),
@@ -401,6 +404,9 @@ macro p_str(raw_path::String, flags...)
             let $var = $(esc(val))
                 if $var isa AbstractString || $var isa AbstractChar
                     $pathkind(validate_path($pathkind, $cstr, false))
+                elseif $var isa AbstractVector{<:AbstractString}
+                    $vecerr
+                    $pathkind([validate_path($pathkind, component, false) for component in $var])
                 elseif $var isa $pathkind
                     $patherr
                     $var
