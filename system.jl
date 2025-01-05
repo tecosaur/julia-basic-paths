@@ -377,21 +377,32 @@ macro p_str(raw_path::String, flags...)
         throw(ArgumentError("~user tilde expansion not implemented"))
     end
     escaped = false
-    function makecomponent(prefix::String, val::Union{Expr, Symbol, String, Char}, suffix::String)
+    function makecomponent(prefix::String, val::Union{Expr, Symbol, String, Char}, suffix::String, delimorfinal::Bool)
         var = gensym("path#segment")
-        perr = if !isempty(prefix)
-            :(throw(ArgumentError("Cannot concatenate path with a string prefix")))
+        patherr = if !delimorfinal
+            :(throw(ArgumentError($"Path `$val` should be separated from subsequent components with a / separator")))
+        elseif !isempty(prefix) && !isempty(suffix)
+            :(throw(ArgumentError($"Cannot concatenate path ($val) with a string prefix ($(sprint(show, prefix))) or suffix ($(sprint(show, suffix)))")))
+        elseif !isempty(prefix)
+            :(throw(ArgumentError($"Cannot concatenate path ($val) with a string prefix ($(sprint(show, prefix)))")))
+        elseif !isempty(suffix)
+            :(throw(ArgumentError($"Cannot concatenate path ($val) with a string suffix ($(sprint(show, suffix)))")))
         end
-        serr = if !isempty(suffix)
-            :(throw(ArgumentError("Cannot concatenate path with a string suffix")))
+        strparts = filter(!isnothing,
+                          (if !isempty(prefix) prefix end,
+                           :(String(string($var))),
+                           if !isempty(suffix) suffix end))
+        cstr = if length(strparts) == 1
+            first(strparts)
+        else
+            Expr(:call, :*, filter(!isnothing, strparts)...)
         end
         quote
             let $var = $(esc(val))
                 if $var isa AbstractString || $var isa AbstractChar
-                    $pathkind(validate_path($pathkind, $prefix * String(string($var)) * $suffix, false))
+                    $pathkind(validate_path($pathkind, $cstr, false))
                 elseif $var isa $pathkind
-                    $perr
-                    $serr
+                    $patherr
                     $var
                 else
                     throw(ArgumentError("Invalid path component type: $var of type $(typeof($var)), should be an AbstractString or Path"))
@@ -399,7 +410,7 @@ macro p_str(raw_path::String, flags...)
             end
         end
     end
-    makecomponent(::String, val, ::String) =
+    makecomponent(::String, val, ::String, ::Bool) =
         throw(ArgumentError("Invalid path component type: $val of type $(typeof(val))"))
     while idx < ncodeunits(path)
         if escaped
@@ -424,11 +435,24 @@ macro p_str(raw_path::String, flags...)
             idx += ncodeunits('$')
             expr, idx = Meta.parseatom(path, idx; filename=string(__source__.file))
             if idx <= ncodeunits(path) && path[idx] != '/'
-                sidx = something(findnext(==('/'), path, idx), ncodeunits(path) + 1)
+                sesc = false
+                sidx = idx
+                while sidx < ncodeunits(path)
+                    if path[sidx] == '/'
+                        break
+                    elseif sesc
+                        sesc = false
+                    elseif path[sidx] == '\\'
+                        sesc = true
+                    elseif path[sidx] == '$'
+                        break
+                    end
+                    sidx = nextind(path, sidx)
+                end
                 suffix = path[idx:prevind(path, sidx)]
                 idx = sidx
             end
-            push!(components, makecomponent(prefix, expr, suffix))
+            push!(components, makecomponent(prefix, expr, suffix, idx > ncodeunits(path) || path[idx] == '/'))
             if idx < ncodeunits(path) && path[idx] == separator(pathkind)
                 idx += 1
             end
