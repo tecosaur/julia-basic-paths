@@ -99,3 +99,7 @@ Base.chmod(path::Path, mode::Integer; recursive::Bool=false) =
 
 Base.chown(path::Path, owner::Integer, group::Integer=-1) =
     chown(String(path), owner, group)
+
+# From `cmd.jl`
+
+Base.arg_gen(path::Path) = [String(path)]
