@@ -311,6 +311,8 @@ function Base.parse(::Type{WindowsPath}, path::String)
     WindowsPath(path)
 end
 
+# The path macro, and helper functions
+
 """
     @p_str -> Path
 
@@ -369,12 +371,29 @@ macro p_str(raw_path::String, flags...)
     end
     components = Any[]
     path = unescape_string(Base.escape_raw_string(raw_path), '$')
+    withindepot = false
     lastidx = idx = 1
     if startswith(path, "~/") || path == "~"
         push!(components, :(parse(Path, homedir())))
-        lastidx = idx = 3
+        lastidx = idx = 1 + ncodeunits("~/")
     elseif startswith(path, "~")
-        throw(ArgumentError("~user tilde expansion not implemented"))
+        tuser = first(eachsplit(path, '~'))
+        throw(ArgumentError("~user tilde expansion not implemented. This path can expressed verbatim as \$'~'$(tuser[2:end])."))
+    elseif startswith(path, "@/")
+        dir = pkgdir(__module__)
+        isnothing(dir) && throw(ArgumentError("Directory of the current module could not be determined."))
+        deprel, withindepot = depot_remove(dir)
+        push!(components, parse(Path, deprel))
+        lastidx = idx = 1 + ncodeunits("@/")
+    elseif startswith(path, "@./")
+        dir = Base.var"@__DIR__"(__source__, __module__)
+        isnothing(dir) && throw(ArgumentError("Directory of the current file could not be determined."))
+        deprel, withindepot = depot_remove(dir)
+        push!(components, parse(Path, deprel))
+        lastidx = idx = 1 + ncodeunits("@./")
+    elseif startswith(path, "@")
+        atname = first(eachsplit(path, '@'))
+        throw(ArgumentError("$atname shorthand not supported. This path component can be expressed verbatim as \$'@'$(atname[2:end])."))
     end
     escaped = false
     function makecomponent(prefix::String, val::Union{Expr, Symbol, String, Char}, suffix::String, delimorfinal::Bool)
@@ -471,9 +490,32 @@ macro p_str(raw_path::String, flags...)
     elseif lastidx <= lastindex(path)
         push!(components, parse(pathkind, path[lastidx:end]))
     end
-    if length(components) == 1
+    pathexpr = if length(components) == 1
         components[1]
     else
         Expr(:call, :*, components...)
     end
+    if withindepot
+        :(depot_locate($pathexpr))
+    else
+        pathexpr
+    end
+end
+
+function depot_remove(path::String)
+    for depot in DEPOT_PATH
+        if startswith(path, depot)
+            nodep = chopprefix(chopprefix(path, depot), string(separator(Path)))
+            return String(nodep), true
+        end
+    end
+    path, false
+end
+
+function depot_locate(subpath::Path)
+    for depot in DEPOT_PATH
+        dpath = parse(Path, depot) * subpath
+        ispath(dpath) && return dpath
+    end
+    throw(error("Failed to relocate [depot]/$(String(subpath)) to any of DEPOT_PATH."))
 end
