@@ -17,7 +17,7 @@ parent(path::AbstractPath{T}) -> Union{AbstractPath{T}, Nothing}
 basename(path::AbstractPath{T}) -> T
 length(path::AbstractPath{T}) -> Int
 iterate(path::AbstractPath{T}) -> T...
-*(a::AbstractPath{T}, b::AbstractPath{T}) -> AbstractPath{T}
+joinpath(a::AbstractPath{T}, b::AbstractPath{T}) -> AbstractPath{T}
 ```
 
 Optional methods, with generic implementations derived

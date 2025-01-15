@@ -417,7 +417,7 @@ macro p_str(raw_path::String, flags...)
         cstr = if length(strparts) == 1
             first(strparts)
         else
-            Expr(:call, :*, filter(!isnothing, strparts)...)
+            Expr(:call, :joinpath, filter(!isnothing, strparts)...)
         end
         quote
             let $var = $(esc(val))
@@ -493,7 +493,7 @@ macro p_str(raw_path::String, flags...)
     pathexpr = if length(components) == 1
         components[1]
     else
-        Expr(:call, :*, components...)
+        Expr(:call, :joinpath, components...)
     end
     if withindepot
         :(depot_locate($pathexpr))
@@ -514,7 +514,7 @@ end
 
 function depot_locate(subpath::Path)
     for depot in DEPOT_PATH
-        dpath = parse(Path, depot) * subpath
+        dpath = joinpath(parse(Path, depot), subpath)
         ispath(dpath) && return dpath
     end
     throw(error("Failed to relocate [depot]/$(String(subpath)) to any of DEPOT_PATH."))

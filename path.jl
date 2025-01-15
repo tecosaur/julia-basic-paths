@@ -68,7 +68,7 @@ function Base.showerror(io::IO, ex::AbsolutePathError)
     print(io, "AbsolutePathError: Cannot join one path ($(ex.a.data)) with an absolute path ($(ex.b.data))")
 end
 
-Base.@assume_effects :foldable function Base.:(*)(a::GenericPlainPath{P}, b::GenericPlainPath{P}) where {P}
+Base.@assume_effects :foldable function Base.joinpath(a::GenericPlainPath{P}, b::GenericPlainPath{P}) where {P}
     isabsolute(b) && throw(AbsolutePathError(a, b))
     if a.data == pseudoself(P)
         return b
@@ -218,4 +218,4 @@ Base.iterate(path::PlainPath, i::Int) = iterate(genericpath(path), i)
 Base.String(path::PlainPath) = String(genericpath(path))
 
 # See the end of `pathbuf.jl` for the implementation of
-# `generic_rewrap` and `*(::PlainPath, ::PlainPath)`.
+# `generic_rewrap` and `joinpath(::PlainPath, ::PlainPath)`.

@@ -88,7 +88,7 @@ end
 
 Base.length(path::GenericPlainPathBuf) = length(path.separators) + isempty(path.separators)
 
-function Base.:(*)(a::GenericPlainPathBuf{P}, b::GenericPlainPathBuf{P}) where {P}
+function Base.joinpath(a::GenericPlainPathBuf{P}, b::GenericPlainPathBuf{P}) where {P}
     isabsolute(b) && return b
     cdata = Vector{UInt8}(undef, length(a.data) + length(b.data) + 1)
     copyto!(cdata, a.data)
@@ -211,8 +211,8 @@ function generic_rewrap(f::F, path::PlainPath) where {F <: Function}
     P(fp)
 end
 
-function Base.:(*)(a::PlainPath, b::PlainPath)
-    cgp = genericpath(a) * genericpath(b)
+function Base.joinpath(a::PlainPath, b::PlainPath)
+    cgp = joinpath(genericpath(a), genericpath(b))
     P = if cgp isa GenericPlainPath
         (((::GenericPlainPath{P}) where {P}) -> P)(cgp)
     elseif cgp isa GenericPlainPathBuf

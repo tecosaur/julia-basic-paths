@@ -75,7 +75,7 @@ Base.mv(src::Path, dst::Path; force::Bool=false) =
 function Base.readdir(path::Path; join::Bool=false, sort::Bool=false)
     children = [Path(child, 0, 0, 0) for child in readdir(String(path); sort)]
     if join
-        [p * child for child in children]
+        [joinpath(p, child) for child in children]
     else
         children
     end
