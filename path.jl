@@ -101,7 +101,7 @@ function ispseudopath(p::GenericPlainPath{P}) where {P}
         false
     elseif startswith(p.data, ppar)
         ncodeunits(p.data) == ncodeunits(ppar) ||
-            codeunit(p.daat, ncodeunits(ppar) + 1) == separatorbyte(P)
+            codeunit(p.data, ncodeunits(ppar) + 1) == separatorbyte(P)
     else
         false
     end

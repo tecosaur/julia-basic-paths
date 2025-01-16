@@ -73,9 +73,9 @@ Base.mv(src::Path, dst::Path; force::Bool=false) =
     mv(src.data, dst.data; force)
 
 function Base.readdir(path::Path; join::Bool=false, sort::Bool=false)
-    children = [Path(child, 0, 0, 0) for child in readdir(String(path); sort)]
+    children = [Path(child) for child in readdir(String(path); sort)]
     if join
-        [joinpath(p, child) for child in children]
+        [joinpath(path, child) for child in children]
     else
         children
     end
