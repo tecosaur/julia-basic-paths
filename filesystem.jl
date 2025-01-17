@@ -103,3 +103,74 @@ Base.chown(path::Path, owner::Integer, group::Integer=-1) =
 # From `cmd.jl`
 
 Base.arg_gen(path::Path) = [String(path)]
+
+# More efficient filesystem mapreduce
+
+"""
+    UnsafeLazyReadDir(dir::Path) -> iterator<Tuple{Path, Bool}>
+
+A lazy iterator over the contents of a directory that must be manually cleaned up.
+
+The iterator yields tuples of `(path, isdir)` where `path` is `dir` joined with
+the name of a child entry and `isdir` is a boolean indicating whether the entry
+is a directory or a symlink to a directory.
+
+Cleanup is performed by calling `uv_fs_req_cleanup` on the `req` pointer and
+then freeing the memory allocated for `req` (with `Libc.free`).
+
+This is a helper for a more efficient `MapReducer` implementation for `Path`.
+"""
+struct UnsafeLazyReadDir
+    dir::Path
+    req::Ptr{Nothing}
+end
+
+function UnsafeLazyReadDir(dir::Path)
+    req = Libc.malloc(Base.Filesystem._sizeof_uv_fs)
+    UnsafeLazyReadDir(dir, req)
+end
+
+Base.eltype(::Type{UnsafeLazyReadDir}) = Tuple{Path, Bool}
+Base.IteratorEltype(::Type{<:UnsafeLazyReadDir}) = Base.HasEltype()
+Base.IteratorSize(::Type{<:UnsafeLazyReadDir}) = Base.SizeUnknown()
+
+function Base.iterate(rd::UnsafeLazyReadDir)
+    err = ccall(:uv_fs_scandir, Int32, (Ptr{Cvoid}, Ptr{Cvoid}, Cstring, Cint, Ptr{Cvoid}),
+                C_NULL, rd.req, String(rd.dir), 0, C_NULL)
+    err < 0 && Base.uv_error(LazyString("iterate(UnsafeLazyReadDir(", rd.dir, "))"), err)
+    iterate(rd, nothing)
+end
+
+function Base.iterate(rd::UnsafeLazyReadDir, ::Nothing)
+    ent = Ref{Base.Filesystem.uv_dirent_t}()
+    err = ccall(:uv_fs_scandir_next, Cint, (Ptr{Cvoid}, Ptr{Base.Filesystem.uv_dirent_t}), rd.req, ent)
+    if err != Base.UV_EOF
+        name = unsafe_string(ent[].name)
+        path = joinpath(rd.dir, Path(GenericPlainPath{Path}(name, 0, 0)))
+        dirp = ent[].typ == Base.Filesystem.UV_DIRENT_DIR ||
+            (ent[].typ == Base.Filesystem.UV_DIRENT_LINK && isdir(path))
+        (path, dirp), nothing
+    end
+end
+
+function (m::MapReducer)(path::Path, dirp::Bool=isdir(path))
+    dirp || return m.leaffn(path)
+    childs = UnsafeLazyReadDir(path)
+    try
+        leafvals = Iterators.map(
+            function ((childpath, dirp))
+                if dirp
+                    m(childpath, true)
+                else
+                    m.leaffn(childpath)
+                end
+            end,
+            Iterators.filter(
+                ((childpath, dirp),) -> !dirp || m.descendif(childpath),
+                childs))
+        m.mergefn(m.branchfn(path), m.reducefn(leafvals))
+    finally
+        Base.Filesystem.uv_fs_req_cleanup(childs.req)
+        Libc.free(childs.req)
+    end
+end

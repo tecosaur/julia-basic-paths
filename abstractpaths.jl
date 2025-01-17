@@ -48,6 +48,16 @@ Return the immediate parent of `path`, if it exists.
      Part of the [`AbstractPath`](@ref) interface.
 """ Base.parent
 
+@doc """"
+    children(path::AbstractPath{T}) -> Union{iterable<AbstractPath{T}>, Nothing}
+
+Return an iterable of the children of `path`, if it has any.
+
+!!! note
+     Part of the [`AbstractPath`](@ref) interface.
+"""
+function children end
+
 @doc """
     basename(path::AbstractPath{T}) -> T
 
@@ -70,6 +80,95 @@ Return `true` if `path` is absolute, `false` otherwise.
      Optional component of the [`AbstractPath`](@ref) interface.
 """
 isabsolute(path::AbstractPath) = !isnothing(root(path))
+
+# AbstractPath API: Mapreduce
+
+struct MapReducer{BF, LF, MF, RF, DF}
+    branchfn::BF
+    leaffn::LF
+    mergefn::MF
+    reducefn::RF
+    descendif::DF
+end
+
+function (m::MapReducer)(path::AbstractPath, childs = children(path))
+    isnothing(childs) && return m.leaffn(path)
+    leafvals = Iterators.map(
+        function ((child, cchilds))
+            if isnothing(cchilds)
+                m.leaffn(child)
+            else
+                m(child, cchilds)
+            end
+        end,
+        Iterators.filter(
+            ((child, cchilds),) -> !isnothing(cchilds) || m.descendif(child),
+            Iterators.map(c -> (c, children), childs)))
+    m.mergefn(m.branchfn(path), m.reducefn(leafvals))
+end
+
+"""
+    mapreduce(branchfn::Function, leaffn::Function, mergefn::Function, reducefn::Function, path::AbstractPath; [descendif::Function])
+    mapreduce([branchfn::Function = leaffn], leaffn::Function, reduceop::Function, path::AbstractPath; [descendif::Function])
+
+Traverse a path, accumulating mapped values.
+
+The `branchfn -> B` transformation is applied to each node with children, and the
+`leaffn -> L` transformation is applied to each leaf node. The results are then
+reduced with either `reduceop` or `mergefn(B, reducefn(L...))`.
+
+The traversal order is undefined, and so `reducefn`/`reduceop` should be
+associative. If `reduceop` is used, it should be a binary function that combines
+two leaf values (`reduceop(::L, ::L)`). If `reducefn` is used, it is supplied an
+iterator of leaf values.
+
+When using `reduceop`, it is possible to omit `branchfn` for convenience, in
+which case `leaffn` is used for both branches and leaves.
+
+# Examples
+
+Count the total number of locations one may reach from a path:
+
+```julia
+numdest(path) = mapreducepath(_ -> 1, +, path)
+```
+
+Count only the number of branch points under a path:
+
+```julia
+numbranches(path) = mapreducepath(_ -> 1, _ -> 0, +, path)
+```
+
+List all possible destinations from a path:
+
+```julia
+alldests(path) = mapreducepath(identity, identity, vcat, collect, path)
+```
+
+Find the most steps one could take starting from a path:
+
+```
+maxdepth(path) = mapreducepath(_ -> nothing, _ -> 1, (_, dmax) -> dmax + 1, depths -> maximum(depths, init=0), path)
+```
+"""
+function mapreducepath(branchfn::FB, leaffn::FL, mergefn::FM, reducefn::FR, path::AbstractPath; descendif::FD = Returns(true)) where {FB <: Function, FL <: Function, FM <: Function, FR <: Function, FD <: Function}
+    mr = MapReducer(branchfn, leaffn, mergefn, reducefn, descendif)
+    mr(path)
+end
+
+function mapreducepath(branchfn::FB, leaffn::FL, op::FO, path::AbstractPath; descendif::FD = Returns(true)) where {FB <: Function, FL <: Function, FO <: Function, FD <: Function}
+    fnret = Core.Compiler.return_type(leaffn, Tuple{typeof(path)})
+    reducer = if applicable(zero, fnret)
+        leaves -> reduce(op, leaves, init=zero(fnret))
+    else
+        leaves -> reduce(op, leaves)
+    end
+    mapreducepath(branchfn, leaffn, op, reducer, path; descendif)
+end
+
+function mapreducepath(nodefn::FN, op::FO, path::AbstractPath; descendif::FD = Returns(true)) where {FN <: Function, FO <: Function, FD <: Function}
+    mapreducepath(nodefn, nodefn, op, path; descendif)
+end
 
 # ---------------------
 # PlainPath + generic implementation

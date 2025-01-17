@@ -50,6 +50,12 @@ function Base.show(io::IO, path::Path)
     print(io, '"')
 end
 
+function children(path::Path)
+    if isdir(path)
+        readdir(path, join=true)
+    end
+end
+
 # System path buffer types
 
 struct PosixPathBuf <: SystemPath

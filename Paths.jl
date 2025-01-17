@@ -4,7 +4,7 @@ module Paths
 export root, isabsolute # `parents` and `basename` are already in `Base`
 
 export PosixPath, WindowsPath, Path,
-    PosixPathBuf, WindowsPathBuf, PathBuf, @p_str
+    PosixPathBuf, WindowsPathBuf, PathBuf, @p_str, mapreducepath
 
 public AbstractPath, PlainPath, SystemPath, separator
 
