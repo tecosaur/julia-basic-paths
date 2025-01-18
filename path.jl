@@ -22,15 +22,25 @@ isabsolute(path::GenericPlainPath) = !iszero(path.rootsep)
 
 function Base.parent(path::GenericPlainPath{P}) where {P <: PlainPath}
     if iszero(path.lastsep)
-        return if !iszero(path.rootsep) && ncodeunits(path.data) > path.rootsep
+        return if iszero(path.rootsep) # Relative, single segment path
+            if path.data == pseudoself(P) # Turn "." into ".."
+                GenericPlainPath{P}(pseudoparent(P), 0, 0)
+            elseif path.data == pseudoparent(P) # Turn ".." into "../.."
+                GenericPlainPath{P}(pseudoparent(P) * separator(P) * pseudoparent(P), 0, ncodeunits(pseudoparent(P)) + 1)
+            elseif !isnothing(pseudoself(P)) # Parent of "something" is "."
+                GenericPlainPath{P}(pseudoself(P), 0, 0)
+            end
+        elseif ncodeunits(path.data) > path.rootsep # Root + single segment
             GenericPlainPath{P}(path.data[1:path.rootsep+isone(path.rootsep)-1], path.rootsep, 0)
         end
+    elseif path.data[max(path.rootsep, path.lastsep)+1:end] == pseudoparent(P) # Of the form "../../.."
+        GenericPlainPath{P}(path.data * separator(P) * pseudoparent(P), path.rootsep, path.lastsep + ncodeunits(pseudoparent(P)) + 1)
+    else # Some multi-segment path
+        parentdata = path.data[1:max(1, path.lastsep-1)]
+        priorsep = something(findlast(isequal(separatorbyte(P)), parentdata),
+                            zero(UInt16))
+        GenericPlainPath{P}(parentdata, path.rootsep, priorsep)
     end
-    iszero(path.lastsep) && path.rootsep ∈ (0, 1) && return nothing
-    parentdata = path.data[1:max(1, path.lastsep-1)]
-    priorsep = something(findlast(isequal(separatorbyte(P)), parentdata),
-                         zero(UInt16))
-    GenericPlainPath{P}(parentdata, path.rootsep, priorsep)
 end
 
 function Base.basename(path::GenericPlainPath{P}) where {P <: PlainPath}
