@@ -1,32 +1,53 @@
 # System path types
 
 """
-    SystemPath <: PlainPath
+    PlatformPath <: PlainPath
 
 An abstract type representing platform-specific paths, built on top of [`PlainPath`](@ref).
-`SystemPath` defines the base interface for filesystem paths with operating system–specific
+`PlatformPath` defines the base interface for filesystem paths with operating system–specific
 semantics. Concrete subtypes like [`PosixPath`](@ref) and [`WindowsPath`](@ref) implement
 platform-dependent behavior.
 
 # Interface
 
-Implementations of `SystemPath` should provide:
+Implementations of `PlatformPath` should provide:
 
 - `separator(::Type{T}) -> Char`: Returns the path separator for type `T`.
 - `pseudoself(::Type{T}) -> String`: Returns the self-referential pseudosegment for type `T`.
 - `pseudoparent(::Type{T}) -> String`: Returns the parent-referential pseudosegment for type `T`.
 """
-abstract type SystemPath <: PlainPath end
+abstract type PlatformPath <: PlainPath end
 
-pseudoself(::Type{<:SystemPath}) = "."
-pseudoparent(::Type{<:SystemPath}) = ".."
+pseudoself(::Type{<:PlatformPath}) = "."
+pseudoparent(::Type{<:PlatformPath}) = ".."
 
-struct PosixPath <: SystemPath
-    path::GenericPlainPath{PosixPath}
-end
+"""
+    SystemPath <: PlatformPath
 
-struct WindowsPath <: SystemPath
-    path::GenericPlainPath{WindowsPath}
+An abstract type for paths that are native to the current operating system.
+"""
+abstract type SystemPath <: PlatformPath end
+
+@static if !Sys.iswindows()
+    struct PosixPath <: SystemPath
+        path::GenericPlainPath{PosixPath}
+    end
+
+    struct WindowsPath <: PlatformPath
+        path::GenericPlainPath{WindowsPath}
+    end
+
+    const PurePath = PosixPath
+else
+    struct PosixPath <: PlatformPath
+        path::GenericPlainPath{PosixPath}
+    end
+
+    struct WindowsPath <: SystemPath
+        path::GenericPlainPath{WindowsPath}
+    end
+
+    const PurePath = WindowsPath
 end
 
 separator(::Type{PosixPath}) = '/'
@@ -35,13 +56,7 @@ separator(::Type{WindowsPath}) = '\\'
 genericpath(path::PosixPath) = path.path
 genericpath(path::WindowsPath) = path.path
 
-const Path = @static if Sys.iswindows()
-    WindowsPath
-else
-    PosixPath
-end
-
-function Base.show(io::IO, path::Path)
+function Base.show(io::IO, path::PurePath)
     print(io, "p\"")
     for (i, segment) in enumerate(path)
         i > (1 + isone(path.path.rootsep)) && print(io, '/')
@@ -50,7 +65,7 @@ function Base.show(io::IO, path::Path)
     print(io, '"')
 end
 
-function children(path::Path)
+function children(path::PurePath)
     if isdir(path)
         readdir(path, join=true)
     end
@@ -58,11 +73,11 @@ end
 
 # System path buffer types
 
-struct PosixPathBuf <: SystemPath
+struct PosixPathBuf <: PlatformPath
     path::GenericPlainPathBuf{PosixPath}
 end
 
-struct WindowsPathBuf <: SystemPath
+struct WindowsPathBuf <: PlatformPath
     path::GenericPlainPathBuf{WindowsPath}
 end
 
@@ -106,44 +121,44 @@ WindowsPathBuf(path::WindowsPath) = convert(WindowsPathBuf, path)
 
 # General path methods (could be defined for each path subtype)
 
-Base.:(==)(a::Path, b::Path) = a.path.data == b.path.data
+Base.:(==)(a::PurePath, b::PurePath) = a.path.data == b.path.data
 
-function Base.hash(path::Path, h::UInt)
-    h = hash(Path, h)
+function Base.hash(path::PurePath, h::UInt)
+    h = hash(PurePath, h)
     hash(path.data.path, h)
 end
 
-function Base.startswith(a::Path, b::Path)
+function Base.startswith(a::PurePath, b::PurePath)
     if ncodeunits(a.path.data) < ncodeunits(b.path.data)
         false
     elseif ncodeunits(a.path.data) == ncodeunits(b.path.data)
         a == b
     else
         startswith(a.path.data, b.path.data) &&
-            codeunit(a.path.data, ncodeunits(b.path.data) + 1) == separatorbyte(Path)
+            codeunit(a.path.data, ncodeunits(b.path.data) + 1) == separatorbyte(PurePath)
     end
 end
 
-Base.:(<)(a::Path, b::Path) = startswith(b, a)
-Base.:(>)(a::Path, b::Path) = startswith(a, b)
+Base.:(<)(a::PurePath, b::PurePath) = startswith(b, a)
+Base.:(>)(a::PurePath, b::PurePath) = startswith(a, b)
 
-function Base.endswith(a::Path, b::Path)
+function Base.endswith(a::PurePath, b::PurePath)
     if ncodeunits(a.path.data) < ncodeunits(b.path.data)
         false
     elseif ncodeunits(a.path.data) == ncodeunits(b.path.data)
         a == b
     else
         endswith(a.path.data, b.path.data) &&
-            codeunit(a.path.data, ncodeunits(a.path.data) - ncodeunits(b.path.data)) == separatorbyte(Path)
+            codeunit(a.path.data, ncodeunits(a.path.data) - ncodeunits(b.path.data)) == separatorbyte(PurePath)
     end
 end
 
 # ---------------------
-# Path construction
+# PurePath construction
 # ---------------------
 
 """
-    validate_path(::Type{E<:SystemPath}, ::Type{P<:SystemPath}, segment::AbstractString, allowsep::Bool = true)
+    validate_path(::Type{E<:PlatformPath}, ::Type{P<:PlatformPath}, segment::AbstractString, allowsep::Bool = true)
 
 Validate a path or path segment (depending on `allowsep`) for the system path type `P`.
 
@@ -152,13 +167,13 @@ Returns `nothing` when `segment` is valid, or an `InvalidSegment{E}` describing 
 function validate_path end
 
 """
-    validate_path(::Type{P<:SystemPath}, segment::AbstractString, allowsep::Bool = true)
+    validate_path(::Type{P<:PlatformPath}, segment::AbstractString, allowsep::Bool = true)
 
 Validate a path or path segment (depending on `allowsep`) for the system path type `P`.
 
 Returns `segment` when it is valid, or throws an `InvalidSegment{P}` describing the issue.
 """
-function validate_path(::Type{T}, segment::AbstractString, allowsep::Bool = true) where {T <: SystemPath}
+function validate_path(::Type{T}, segment::AbstractString, allowsep::Bool = true) where {T <: PlatformPath}
     err = validate_path(InvalidSegment{T}, T, segment, allowsep)
     if !isnothing(err)
         throw(err)
@@ -169,7 +184,7 @@ end
 
 # Posix
 
-Base.@assume_effects :foldable function validate_path(::Type{InvalidSegment{T}}, ::Type{PosixPath}, segment::AbstractString, allowsep::Bool = true) where {T <: SystemPath}
+Base.@assume_effects :foldable function validate_path(::Type{InvalidSegment{T}}, ::Type{PosixPath}, segment::AbstractString, allowsep::Bool = true) where {T <: PlatformPath}
     if segment == ""
         InvalidSegment{T}(segment, :empty)
     elseif segment == "."
@@ -238,7 +253,7 @@ end
 
 # Windows
 
-Base.@assume_effects :foldable function validate_path(::Type{InvalidSegment{T}}, ::Type{WindowsPath}, segment::AbstractString, allowsep::Bool = false) where {T <: SystemPath}
+Base.@assume_effects :foldable function validate_path(::Type{InvalidSegment{T}}, ::Type{WindowsPath}, segment::AbstractString, allowsep::Bool = false) where {T <: PlatformPath}
     posix_err = validate_path(InvalidSegment{WindowsPath}, PosixPath, segment, allowsep)
     isnothing(posix_err) || throw(posix_err) # Since Windows rules are a superset of Posix rules
     if segment in ("CON", "PRN", "AUX", "NUL",
@@ -320,9 +335,9 @@ end
 # The path macro, and helper functions
 
 """
-    @p_str -> Path
+    @p_str -> PurePath
 
-Construct a [`Path`](@ref) from a cross-platform literal representation.
+Construct a [`PurePath`](@ref) from a cross-platform literal representation.
 
 The path should be written in posix style, with `/` as the separator.
 
@@ -336,7 +351,7 @@ During construction, the part will be normalised such that:
 
 Similarly to strings in Julia, `\$` can be used to interpolate *path components*.
 A path component can be an `AbstractString` that forms a single path segment, an
-`AbstractVector{<:AbstractString}` of path segments, or another `Path`. Literal
+`AbstractVector{<:AbstractString}` of path segments, or another `PurePath`. Literal
 `\$` characters can be escaped with `\\\$`.
 
 # Examples
@@ -367,7 +382,7 @@ end)
 """
 macro p_str(raw_path::String, flags...)
     pathkind = if isempty(flags)
-        Path
+        PurePath
     elseif first(flags) == "posix"
         PosixPath
     elseif first(flags) == "win"
@@ -380,7 +395,7 @@ macro p_str(raw_path::String, flags...)
     withindepot = false
     lastidx = idx = 1
     if startswith(path, "~/") || path == "~"
-        push!(components, :(parse(Path, homedir())))
+        push!(components, :(parse(PurePath, homedir())))
         lastidx = idx = 1 + ncodeunits("~/")
     elseif startswith(path, "~")
         tuser = first(eachsplit(path, '~'))
@@ -389,13 +404,13 @@ macro p_str(raw_path::String, flags...)
         dir = pkgdir(__module__)
         isnothing(dir) && throw(ArgumentError("Directory of the current module could not be determined."))
         deprel, withindepot = depot_remove(dir)
-        push!(components, parse(Path, deprel))
+        push!(components, parse(PurePath, deprel))
         lastidx = idx = 1 + ncodeunits("@/")
     elseif startswith(path, "@./")
         dir = Base.var"@__DIR__"(__source__, __module__)
         isnothing(dir) && throw(ArgumentError("Directory of the current file could not be determined."))
         deprel, withindepot = depot_remove(dir)
-        push!(components, parse(Path, deprel))
+        push!(components, parse(PurePath, deprel))
         lastidx = idx = 1 + ncodeunits("@./")
     elseif startswith(path, "@")
         atname = first(eachsplit(path, '@'))
@@ -405,7 +420,7 @@ macro p_str(raw_path::String, flags...)
     function makecomponent(prefix::String, val::Union{Expr, Symbol, String, Char}, suffix::String, delimorfinal::Bool)
         var = gensym("path#segment")
         patherr = if !delimorfinal
-            :(throw(ArgumentError($"Path `$val` should be separated from subsequent components with a / separator")))
+            :(throw(ArgumentError($"PurePath `$val` should be separated from subsequent components with a / separator")))
         elseif !isempty(prefix) && !isempty(suffix)
             :(throw(ArgumentError($"Cannot concatenate path ($val) with a string prefix ($(sprint(show, prefix))) or suffix ($(sprint(show, suffix)))")))
         elseif !isempty(prefix)
@@ -414,7 +429,7 @@ macro p_str(raw_path::String, flags...)
             :(throw(ArgumentError($"Cannot concatenate path ($val) with a string suffix ($(sprint(show, suffix)))")))
         end
         vecerr = if !delimorfinal
-            :(throw(ArgumentError($"Path component vector `$val` should be separated from subsequent components with a / separator")))
+            :(throw(ArgumentError($"PurePath component vector `$val` should be separated from subsequent components with a / separator")))
         end
         strparts = filter(!isnothing,
                           (if !isempty(prefix) prefix end,
@@ -436,7 +451,7 @@ macro p_str(raw_path::String, flags...)
                     $patherr
                     $var
                 else
-                    throw(ArgumentError("Invalid path component type: $var of type $(typeof($var)), should be an AbstractString or Path"))
+                    throw(ArgumentError("Invalid path component type: $var of type $(typeof($var)), should be an AbstractString or PurePath"))
                 end
             end
         end
@@ -511,16 +526,16 @@ end
 function depot_remove(path::String)
     for depot in DEPOT_PATH
         if startswith(path, depot)
-            nodep = chopprefix(chopprefix(path, depot), string(separator(Path)))
+            nodep = chopprefix(chopprefix(path, depot), string(separator(PurePath)))
             return String(nodep), true
         end
     end
     path, false
 end
 
-function depot_locate(subpath::Path)
+function depot_locate(subpath::PurePath)
     for depot in DEPOT_PATH
-        dpath = joinpath(parse(Path, depot), subpath)
+        dpath = joinpath(parse(PurePath, depot), subpath)
         ispath(dpath) && return dpath
     end
     throw(error("Failed to relocate [depot]/$(String(subpath)) to any of DEPOT_PATH."))
