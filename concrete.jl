@@ -10,14 +10,14 @@ const O_PATH = 0x00200000
 const AT_FDCWD = -100
 
 mutable struct Path <: SystemPath
-    const fd::UInt32
+    const fd::RawFD
     const flags::UInt32
     open::Bool
 end
 
 function Path(path::PurePath, flags::Integer = O_PATH)
-    pfd = @ccall open(String(path)::Cstring, UInt32(flags)::Cint, 0::Cint)::Int32
-    pfd < 0 && throw(SystemError("open"))
+    pfd = @ccall open(String(path)::Cstring, UInt32(flags)::Cint, 0::Cint)::RawFD
+    reinterpret(Int32, pfd) < 0 && throw(SystemError("open"))
     p = Path(pfd, flags, true)
     finalizer(close, p)
     p
@@ -25,8 +25,8 @@ end
 
 function Path(parent::Path, child::PurePath, flags::Integer = O_PATH)
     checkopen(parent)
-    pfd = @ccall openat(parent.fd::Cint, String(child)::Cstring, UInt32(flags)::Cint, 0::Cint)::Int32
-    pfd < 0 && throw(SystemError("openat"))
+    pfd = @ccall openat(parent.fd::RawFD, String(child)::Cstring, UInt32(flags)::Cint, 0::Cint)::RawFD
+    reinterpret(Int32, pfd) < 0 && throw(SystemError("openat"))
     p = Path(pfd, flags, true)
     finalizer(close, p)
     p
@@ -35,7 +35,7 @@ end
 function Base.close(path::Path)
     path.open || return
     path.open = false
-    err = @ccall close(path.fd::Cint)::Int
+    err = @ccall close(path.fd::RawFD)::Int
     if err < 0
         throw(SystemError("close"))
     end
@@ -52,8 +52,8 @@ end
 function reopen(path::Path, flags::Integer)
     isopen(path) || return path # Downstream methods should check for open-ness
     path.flags == flags && return path
-    procpath = string("/proc/self/fd/", path.fd)
-    newfd = @ccall open(procpath::Cstring, flags::Cint)::Int32
+    procpath = string("/proc/self/fd/", reinterpret(Int32, path.fd))
+    newfd = @ccall open(procpath::Cstring, flags::Cint)::RawFD
     if newfd == -1
         throw(SystemError("open"))
     end
@@ -61,7 +61,7 @@ function reopen(path::Path, flags::Integer)
 end
 
 function Base.convert(::Type{PurePath}, pd::Path)
-    path = readlink(string("/proc/self/fd/", pd.fd))
+    path = readlink(string("/proc/self/fd/", reinterpret(Int32, pd.fd)))
     lastsep = something(findlast(==(separatorbyte(PurePath)), codeunits(path)), 0)
     PurePath(GenericPlainPath{PurePath}(path, 1, ifelse(lastsep > 1, lastsep, 0)))
 end
@@ -113,9 +113,9 @@ function Base.open(path::Path; lock = true,
     flagopts.append && (flags |= Base.Filesystem.JL_O_APPEND)
     flagopts.truncate && (flags |= Base.Filesystem.JL_O_TRUNC)
     if path.flags == flags
-        fdio(path.fd, false)
+        fdio(reinterpret(Int32, path.fd), false)
     else
-        fdio(reopen(path, flags).fd, true)
+        fdio(reinterpret(Int32, reopen(path, flags).fd), true)
     end
  end
 
@@ -124,7 +124,7 @@ function Base.open(path::Path; lock = true,
 function Base.isexecutable(path::Path)
     checkopen(path)
     X_OK = 0x01
-    ret = @ccall faccessat(path.fd::Cint, ""::Cstring, X_OK::Cint, AT_EMPTY_PATH::Cint)::Int32
+    ret = @ccall faccessat(path.fd::RawFD, ""::Cstring, X_OK::Cint, AT_EMPTY_PATH::Cint)::Int32
     if ret ∉ (0, -1)
         throw(SystemError("faccessat"))
     end
@@ -134,7 +134,7 @@ end
 function Base.isreadable(path::Path)
     checkopen(path)
     R_OK = 0x04
-    ret = @ccall faccessat(path.fd::Cint, ""::Cstring, R_OK::Cint, AT_EMPTY_PATH::Cint)::Int32
+    ret = @ccall faccessat(path.fd::RawFD, ""::Cstring, R_OK::Cint, AT_EMPTY_PATH::Cint)::Int32
     if ret ∉ (0, -1)
         throw(SystemError("faccessat"))
     end
@@ -144,7 +144,7 @@ end
 function Base.iswritable(path::Path)
     checkopen(path)
     W_OK = 0x02
-    ret = @ccall faccessat(path.fd::Cint, ""::Cstring, W_OK::Cint, AT_EMPTY_PATH::Cint)::Int32
+    ret = @ccall faccessat(path.fd::RawFD, ""::Cstring, W_OK::Cint, AT_EMPTY_PATH::Cint)::Int32
     if ret ∉ (0, -1)
         throw(SystemError("faccessat"))
     end
@@ -245,7 +245,7 @@ end
 
 function Base.cd(path::Path)
     checkopen(path)
-    err = @ccall fchdir(path.fd::Cint)::Int32
+    err = @ccall fchdir(path.fd::RawFD)::Int32
     if err < 0
         throw(SystemError("fchdir"))
     end
@@ -263,7 +263,7 @@ end
 
 function Base.chmod(path::Path, mode::Integer)
     checkopen(path)
-    err = @ccall fchmod(path.fd::Cint, mode::Cint)::Int32
+    err = @ccall fchmod(path.fd::RawFD, mode::Cint)::Int32
     if err < 0
         throw(SystemError("fchmod"))
     end
@@ -341,7 +341,7 @@ end
 function Base.cp(src::Path, dst::PurePath)
     checkopen(src)
     isdir(src) && throw(ArgumentError("Source is a directory"))
-    ret = @ccall linkat(src.fd::Cint, ""::Cstring,
+    ret = @ccall linkat(src.fd::RawFD, ""::Cstring,
                         AT_FDCWD::Cint, String(dst)::Cstring,
                         AT_EMPTY_PATH::Cint)::Int32
     ret < 0 && throw(SystemError("linkat"))
@@ -350,7 +350,7 @@ end
 
 function Base.rm(path::Path)
     checkopen(path)
-    ret = @ccall unlinkat(path.fd::Cint, ""::Cstring,
+    ret = @ccall unlinkat(path.fd::RawFD, ""::Cstring,
                           AT_EMPTY_PATH::Cint)::Int32
     if ret < 0
         throw(SystemError("unlinkat"))
