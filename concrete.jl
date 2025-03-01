@@ -173,13 +173,7 @@ const StatForm = @NamedTuple{
     cnsecs::UInt64
 }
 
-function Base.stat(path::Path)
-    checkopen(path)
-    statbuf = fill!(Memory{UInt8}(undef, Int(ccall(:jl_sizeof_stat, Int32, ()))), 0x00)
-    err = @ccall fstat(path.fd::Cint, statbuf::Ptr{UInt8})::Int32
-    if err < 0
-        throw(SystemError("fstat"))
-    end
+function statinterpret(statbuf::Memory{UInt8})
     statinfos = reinterpret(StatForm, view(statbuf, 1:sizeof(StatForm)))
     length(statinfos) == 1 || error("Huh, what's this?")
     si = first(statinfos)
@@ -199,6 +193,16 @@ function Base.stat(path::Path)
         muladd(si.cnsecs, 1e-9, si.csecs),
         Int32(err)
     )
+end
+
+function Base.stat(path::Path)
+    checkopen(path)
+    statbuf = fill!(Memory{UInt8}(undef, Int(ccall(:jl_sizeof_stat, Int32, ()))), 0x00)
+    err = @ccall fstat(path.fd::Cint, statbuf::Ptr{UInt8})::Int32
+    if err < 0
+        throw(SystemError("fstat"))
+    end
+    statinterpret(statbuf)
 end
 
 for f in Symbol[
@@ -270,73 +274,170 @@ function Base.chmod(path::Path, mode::Integer)
 end
 
 struct DirEntry <: SystemPath
-    name::PurePath
+    parent::Path
+    name::String
     type::UInt8
 end
 
 # AbstractPath interface
 root(::DirEntry) = nothing
 isabsolute(::DirEntry) = false
-Base.parent(de::DirEntry) = p"../$(de.name)"
-Base.basename(de::DirEntry) = basename(de.name)
-Base.length(de::DirEntry) = 1
+Base.parent(de::DirEntry) = de.parent
+Base.basename(de::DirEntry) = de.name
+Base.length(de::DirEntry) = 1 + length(de.parent)
 Base.iterate(de::DirEntry) = (basename(de.name), nothing)
 Base.iterate(de::DirEntry, ::Nothing) = nothing
 # PlainPath interface
-genericpath(de::DirEntry) = de.name
+genericpath(de::DirEntry) = genericpath(convert(PurePath, de))
 
-# Convenience
-Base.convert(::Type{PurePath}, de::DirEntry) = de.name
-Base.show(io::IO, de::DirEntry) = show(io, de.name)
+function Base.isless(a::DirEntry, b::DirEntry)
+    # a.parent == b.parent || return isless(a.parent, b.parent)
+    isless(a.name, b.name)
+end
 
-Path(parent::Path, child::DirEntry, flags::Integer = O_PATH) =
-    Path(parent, child.name, flags)
+# Conversion
 
-const DT_UNKNOWN = 0
-const DT_FIFO = 1
-const DT_CHR = 2
-const DT_DIR = 4
-const DT_BLK = 6
-const DT_REG = 8
-const DT_LNK = 10
-const DT_SOCK = 12
-const DT_WHT = 14
+function Base.convert(::Type{PurePath}, de::DirEntry)
+    namep = PurePath(GenericPlainPath{PurePath}(de.name, 0, 0))
+    joinpath(convert(PurePath, de.parent), namep)
+end
 
-Base.Filesystem.isunknown(de::DirEntry) = de.type == DT_UNKNOWN
-Base.isfifo(de::DirEntry) = de.type == DT_FIFO
-Base.ischardev(de::DirEntry) = de.type == DT_CHR
-Base.isdir(de::DirEntry) = de.type == DT_DIR
-Base.isblockdev(de::DirEntry) = de.type == DT_BLK
-Base.isfile(de::DirEntry) = de.type == DT_REG
-Base.issocket(de::DirEntry) = de.type == DT_SOCK
+function Base.convert(::Type{Path}, de::DirEntry)
+    checkopen(de.parent)
+    pfd = @ccall openat(de.parent.fd::RawFD, de.name::Cstring, O_PATH::Cint, 0::Cint)::RawFD
+    reinterpret(Int32, pfd) < 0 && throw(SystemError("openat"))
+    p = Path(pfd, O_PATH, true)
+    finalizer(close, p)
+    p
+end
 
-function children(path::Path)
-    checkopen(path)
-    # REVIEW: Should `dup` be used here?
-    pathcopy = reopen(path, Base.Filesystem.JL_O_RDONLY)
-    dirp = @ccall fdopendir(pathcopy.fd::Cint)::Ptr{Cvoid}
-    if dirp === C_NULL
-        throw(SystemError("fdopendir"))
+function Base.convert(::Type{DirEntry}, path::PurePath)
+    dir, name = parent(path), basename(path)
+    DirEntry(convert(Path, dir), name, 0)
+end
+
+Base.convert(::Type{DirEntry}, path::Path) =
+    convert(DirEntry, convert(PurePath, path))
+
+# Stat-ing
+
+const DENT_TYPES = (
+    unknown = 0,
+    fifo = 1,
+    chardev = 2,
+    dir = 4,
+    blockdev = 6,
+    regular = 8,
+    link = 10,
+    socket = 12,
+    whiteout = 14,
+)
+
+for (func, dtval) in ((:isfifo, :fifo),
+                      (:ischardev, :chardev),
+                      (:isdir, :dir),
+                      (:isblockdev, :blockdev),
+                      (:isfile, :regular),
+                      (:islink, :link),
+                      (:issocket, :socket))
+    @eval function Base.$func(de::DirEntry)
+        if de.type == DENT_TYPES.unknown
+            return Base.$func(stat(de))
+        end
+        de.type == DENT_TYPES.$dtval
     end
-    entries = DirEntry[]
+end
+
+function Base.stat(de::DirEntry)
+    checkopen(de.parent)
+    statbuf = fill!(Memory{UInt8}(undef, Int(ccall(:jl_sizeof_stat, Int32, ()))), 0x00)
+    err = @ccall fstatat(de.parent.fd::Cint, de.name::Cstring, statbuf::Ptr{UInt8}, 0::Cint)::Int32
+    if err < 0
+        throw(SystemError("fstatat"))
+    end
+    statinterpret(statbuf)
+end
+
+# Directory iterator
+
+mutable struct DirReader
+    const dir::Path
+    dirp::Ptr{Cvoid}
+    open::Bool
+    start::Bool
+end
+
+function DirReader(path::Path)
+    reader = DirReader(path, C_NULL, false, true)
+    finalizer(close, reader)
+    reader
+end
+
+function Base.close(reader::DirReader)
+    if !reader.open || reader.dirp == C_NULL
+        return
+    end
+    reader.open = false
+    err = @ccall closedir(reader.dirp::Ptr{Cvoid})::Int32
+    if err < 0
+        throw(SystemError("closedir"))
+    end
+end
+
+function Base.iterate(reader::DirReader)
+    if !reader.open
+        checkopen(reader.dir)
+        pathcopy = reopen(reader.dir, Base.Filesystem.JL_O_RDONLY)
+        dirp = @ccall fdopendir(pathcopy.fd::RawFD)::Ptr{Cvoid}
+        dirp === C_NULL && throw(SystemError("fdopendir"))
+        reader.dirp = dirp
+        reader.open = true
+        reader.start = true
+    end
+    if reader.start
+        reader.start = false
+    else
+        err = @ccall rewinddir(reader.dirp::Ptr{Cvoid})::Int32
+        err < 0 && throw(SystemError("rewinddir"))
+    end
+    iterate(reader, nothing)
+end
+
+function Base.iterate(reader::DirReader, ::Nothing)
+    function ispseudopath(ptr::Ptr{UInt8})
+        unsafe_load(ptr) == UInt8('.') || return false
+        nextchar = unsafe_load(ptr + 1)
+        nextchar == 0 && return true
+        nextchar == UInt8('.') && unsafe_load(ptr + 2) == 0 && return true
+        false
+    end
+    reader.open || return
+    # FIXME: Hardcoded `dentheader`
     dentheader = sizeof(UInt64) + sizeof(UInt64) + sizeof(UInt16) + sizeof(UInt8)
     while true
-        dent = @ccall readdir(dirp::Ptr{Cvoid})::Ptr{Cvoid}
-        dent === C_NULL && break
+        dent = @ccall readdir(reader.dirp::Ptr{Cvoid})::Ptr{Cvoid}
+        if dent === C_NULL
+            close(reader)
+            return
+        end
         kind = unsafe_load(Ptr{UInt8}(dent) + dentheader - sizeof(UInt8))
         name_ptr = Ptr{UInt8}(dent) + dentheader
+        ispseudopath(name_ptr) && continue
         name = unsafe_string(name_ptr)
-        name ∈ (".", "..") && continue
-        path = PurePath(GenericPlainPath{PurePath}(name, 0, 0))
-        push!(entries, DirEntry(path, kind))
+        return DirEntry(reader.dir, name, kind), nothing
     end
-    @ccall closedir(dirp::Ptr{Cvoid})::Int32
-    entries
 end
+
+Base.IteratorSize(::Type{DirReader}) = Base.SizeUnknown()
+Base.eltype(::Type{DirReader}) = DirEntry
+
+children(path::Path) = DirReader(path)
 
 # TODO: Work out how to reconcile the (dir::FD, name::String) components
 # of the syscalls/libc functions with the types we have here.
 # This could just be done as extra arguments, but that seems a bit messy.
+# NOTE: Now that it's been tweaked, `DirEntry` seems like it
+# could be a good fit...
 
 function Base.cp(src::Path, dst::PurePath)
     checkopen(src)
