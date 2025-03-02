@@ -72,8 +72,19 @@ isabsolute(::Path) = true
 Base.parent(pd::Path) = Path(parent(convert(PurePath, pd)))
 Base.basename(pd::Path) = basename(convert(PurePath, pd))
 Base.length(pd::Path) = length(convert(PurePath, pd))
-Base.iterate(pd::Path) = iterate(convert(PurePath, pd))
-Base.iterate(pd::Path, i::Int) = iterate(convert(PurePath, pd), i)
+function Base.iterate(pd::Path)
+    pure = convert(PurePath, pd)
+    result = iterate(pure)
+    isnothing(result) && return
+    segment, next = result
+    segment, (pure, next)
+end
+function Base.iterate(pd::Path, (pure, i)::Tuple{PurePath, Int})
+    result = iterate(pure, i)
+    isnothing(result) && return
+    segment, next = result
+    segment, (pure, next)
+end
 # PlainPath interface
 separator(::Type{Path}) = separator(PurePath)
 Base.String(pd::Path) = String(convert(PurePath, pd))
@@ -280,12 +291,17 @@ struct DirEntry <: SystemPath
 end
 
 # AbstractPath interface
-root(::DirEntry) = nothing
-isabsolute(::DirEntry) = false
+root(de::DirEntry) = root(de.parent)
+isabsolute(::DirEntry) = isabsolute(de.parent)
 Base.parent(de::DirEntry) = de.parent
 Base.basename(de::DirEntry) = de.name
 Base.length(de::DirEntry) = 1 + length(de.parent)
-Base.iterate(de::DirEntry) = (basename(de.name), nothing)
+Base.iterate(de::DirEntry) = iterate(de.parent)
+function Base.iterate(de::DirEntry, state)
+    result = iterate(de.parent, state)
+    isnothing(result) && return SubString(de.name), nothing
+    result
+end
 Base.iterate(de::DirEntry, ::Nothing) = nothing
 # PlainPath interface
 genericpath(de::DirEntry) = genericpath(convert(PurePath, de))

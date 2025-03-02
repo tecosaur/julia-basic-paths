@@ -67,7 +67,7 @@ Return the terminal component of `path`.
      Part of the [`AbstractPath`](@ref) interface.
 """ Base.basename
 
-Base.eltype(::Type{AbstractPath{T}}) where {T} = T
+Base.eltype(::Type{<:AbstractPath{T}}) where {T} = T
 
 # AbstractPath API: optional methods
 
