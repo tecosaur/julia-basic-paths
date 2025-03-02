@@ -97,7 +97,7 @@ Base.chown(path::PurePath, owner::Integer, group::Integer=-1) =
 
 # From `cmd.jl`
 
-Base.arg_gen(path::PurePath) = [String(path)]
+Base.arg_gen(path::PlatformPath) = [String(path)]
 
 # More efficient filesystem mapreduce
 
