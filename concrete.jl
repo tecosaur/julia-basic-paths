@@ -89,7 +89,6 @@ end
 separator(::Type{Path}) = separator(PurePath)
 Base.String(pd::Path) = String(convert(PurePath, pd))
 # Trivial filesystem API
-Base.realpath(pd::Path) = pd
 
 function Base.show(io::IO, pd::Path)
     show(io, Path)
@@ -97,6 +96,12 @@ function Base.show(io::IO, pd::Path)
     show(io, convert(PurePath, pd))
     print(io, ')')
 end
+
+# Extra base methods
+Base.realpath(pd::Path) = pd
+
+
+# Simple filesystem operations
 
 # See `iostream.jl`
 function Base.open(path::Path; lock = true,
@@ -184,12 +189,12 @@ const StatForm = @NamedTuple{
     cnsecs::UInt64
 }
 
-function statinterpret(statbuf::Memory{UInt8})
+function statinterpret(desc::Union{String, Base.OS_HANDLE}, statbuf::Memory{UInt8}, err::Int32)
     statinfos = reinterpret(StatForm, view(statbuf, 1:sizeof(StatForm)))
     length(statinfos) == 1 || error("Huh, what's this?")
     si = first(statinfos)
     Base.Filesystem.StatStruct(
-        reinterpret(RawFD, path.fd),
+        desc,
         UInt(si.dev),
         UInt(si.ino),
         UInt(si.mode),
@@ -213,8 +218,10 @@ function Base.stat(path::Path)
     if err < 0
         throw(SystemError("fstat"))
     end
-    statinterpret(statbuf)
+    statinterpret("<Path>", statbuf, err)
 end
+
+Base.samefile(a::Path, b::Path) = samefile(stat(a), stat(b))
 
 for f in Symbol[
     :ispath,
@@ -284,6 +291,29 @@ function Base.chmod(path::Path, mode::Integer)
     end
 end
 
+function Base.chown(path::Path, owner::Integer, group::Integer=-1)
+    checkopen(path)
+    err = @ccall fchown(path.fd::RawFD, owner::Cint, group::Cint)::Int32
+    if err < 0
+        throw(SystemError("fchown"))
+    end
+end
+
+
+# DirEntry type
+
+# REVIEW: Is it worth turning `name` into a `PurePath`? The main reason this
+# comes to mind is so that `joinpath(::DirPath, :PurePath) -> PurePath` could
+# work, but maybe this is a bit of an edge case in practice.
+"""
+    DirEntry <: SystemPath
+
+A single entry within a directory.
+
+A directory entry consists of the name of the entry as a `String` together with
+a live reference to the parent directory [`Path`](@ref). It may also include
+information on the type of the entry at the time of creation.
+"""
 struct DirEntry <: SystemPath
     parent::Path
     name::String
@@ -311,6 +341,8 @@ function Base.isless(a::DirEntry, b::DirEntry)
     isless(a.name, b.name)
 end
 
+checkopen(de::DirEntry) = checkopen(de.parent)
+
 # Conversion
 
 function Base.convert(::Type{PurePath}, de::DirEntry)
@@ -319,7 +351,7 @@ function Base.convert(::Type{PurePath}, de::DirEntry)
 end
 
 function Base.convert(::Type{Path}, de::DirEntry)
-    checkopen(de.parent)
+    checkopen(de)
     pfd = @ccall openat(de.parent.fd::RawFD, de.name::Cstring, O_PATH::Cint, 0::Cint)::RawFD
     reinterpret(Int32, pfd) < 0 && throw(SystemError("openat"))
     p = Path(pfd, O_PATH, true)
@@ -371,9 +403,10 @@ function Base.stat(de::DirEntry)
     if err < 0
         throw(SystemError("fstatat"))
     end
-    statinterpret(statbuf)
+    statinterpret("<DirEntry>", statbuf, err)
 end
 
+
 # Directory iterator
 
 mutable struct DirReader
@@ -436,10 +469,10 @@ function Base.iterate(reader::DirReader, ::Nothing)
             close(reader)
             return
         end
-        kind = unsafe_load(Ptr{UInt8}(dent) + dentheader - sizeof(UInt8))
         name_ptr = Ptr{UInt8}(dent) + dentheader
         ispseudopath(name_ptr) && continue
         name = unsafe_string(name_ptr)
+        kind = unsafe_load(Ptr{UInt8}(dent) + dentheader - sizeof(UInt8))
         return DirEntry(reader.dir, name, kind), nothing
     end
 end
@@ -449,17 +482,25 @@ Base.eltype(::Type{DirReader}) = DirEntry
 
 children(path::Path) = DirReader(path)
 
+
+# More involved filesystem operations
+
 # TODO: Work out how to reconcile the (dir::FD, name::String) components
-# of the syscalls/libc functions with the types we have here.
+# of the libc functions with the types we have here.
 # This could just be done as extra arguments, but that seems a bit messy.
 # NOTE: Now that it's been tweaked, `DirEntry` seems like it
 # could be a good fit...
 
-function Base.cp(src::Path, dst::PurePath)
+for srctype in (Path, PurePath, DirEntry), dsttype in (Path, PurePath, DirEntry)
+    @eval function Base.cp(src::$srctype, dst::$dsttype)
+    end
+end
+
+function Base.cp(src::Path, dst::DirEntry)
     checkopen(src)
     isdir(src) && throw(ArgumentError("Source is a directory"))
     ret = @ccall linkat(src.fd::RawFD, ""::Cstring,
-                        AT_FDCWD::Cint, String(dst)::Cstring,
+                        dst.parent.fd::RawFD, dst.name::Cstring,
                         AT_EMPTY_PATH::Cint)::Int32
     ret < 0 && throw(SystemError("linkat"))
     dst
