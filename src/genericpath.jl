@@ -1,6 +1,6 @@
 # Implementation of the `GenericPlainPath` type and its methods.
 
-struct GenericPlainPath{P <: PlainPath} <: PlainPath
+struct GenericPlainPath{P <: PlainPath} <: PlainPath{Nothing}
     data::String
     rootsep::UInt16
     lastsep::UInt16
@@ -209,9 +209,9 @@ end
 # Optional API
 
 """
-    genericpath(path::PlainPath) -> GenericPlainPath | GenexicPlainPathBuf
+    genericpath(path::PlainPath) -> GenericPlainPath
 
-Return the `GenericPlainPath` or `GenericPlainPathBuf` backing `path`.
+Return the `GenericPlainPath` backing `path`.
 
 Optional component of the `PlainPath` interface.
 """
@@ -229,3 +229,33 @@ Base.String(path::PlainPath) = String(genericpath(path))
 
 # See the end of `pathbuf.jl` for the implementation of
 # `generic_rewrap` and `joinpath(::PlainPath, ::PlainPath)`.
+
+function generic_rewrap(f::F, path::T) where {F <: Function, T <: PlainPath}
+    gp = genericpath(path)
+    P = if gp isa GenericPlainPath
+        (((::GenericPlainPath{P}) where {P}) -> P)(gp)
+    else
+        throw(ArgumentError("Unsupported path type: $(typeof(path))"))
+    end
+    fp = f(gp)
+    isnothing(fp) && return
+    if fieldtype(T, 1) == P
+        T(P(fp))
+    else
+        P(fp)
+    end
+end
+
+function Base.joinpath(a::T, b::PlainPath) where {T <: PlainPath}
+    cgp = joinpath(genericpath(a), genericpath(b))
+    P = if cgp isa GenericPlainPath
+        (((::GenericPlainPath{P}) where {P}) -> P)(cgp)
+    else
+        throw(ArgumentError("Unsupported path type: $(typeof(cgp))"))
+    end
+    if fieldtype(T, 1) == P
+        T(P(cgp))
+    else
+        P(cgp)
+    end
+end
