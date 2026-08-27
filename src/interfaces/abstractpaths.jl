@@ -27,7 +27,12 @@ from the base interface:
 isabsolute(path::AbstractPath{T}) -> Bool
 ```
 """
-abstract type AbstractPath{T, L} <: AbstractResolvable{L} end
+abstract type AbstractPath{S, H <: AbstractHandle} <: AbstractResolvable{H} end
+
+struct RelativePath{H <: AbstractHandle, P <: AbstractPath{<:Any, H}} <: AbstractResolvable{H}
+    parent::H
+    path::P
+end
 
 """
     root(path::AbstractPath{T}) -> Union{AbstractPath{T}, Nothing}
@@ -70,3 +75,5 @@ Return `true` if `path` is absolute, `false` otherwise.
      Optional component of the [`AbstractPath`](@ref) interface.
 """
 isabsolute(path::AbstractPath) = !isnothing(root(path))
+
+handle(::AbstractPath{<:Any, Unhandleable}) = Unhandleable()

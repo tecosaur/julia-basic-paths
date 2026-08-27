@@ -21,14 +21,14 @@ abstract type PlatformPath{L} <: PlainPath{L} end
 pseudoself(::Type{<:PlatformPath}) = "."
 pseudoparent(::Type{<:PlatformPath}) = ".."
 
-struct PosixPath <: PlatformPath{Nothing}
+struct PosixPath <: PlatformPath{Unhandleable}
     path::GenericPlainPath{PosixPath}
 end
 
 separator(::Type{PosixPath}) = '/'
 genericpath(path::PosixPath) = path.path
 
-struct WindowsPath <: PlatformPath{Nothing}
+struct WindowsPath <: PlatformPath{Unhandleable}
     path::GenericPlainPath{WindowsPath}
 end
 

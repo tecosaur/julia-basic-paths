@@ -53,6 +53,8 @@ issticky(::AbstractFileHandle)   :: Bool
 """
 abstract type AbstractFileHandle{F<:AbstractFilesystem, H} <: AbstractHandle{H} end
 
+# API generics
+
 isabsolute(::AbstractFileHandle) = true
 
 for f in (:ispath,

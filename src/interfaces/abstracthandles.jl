@@ -31,7 +31,7 @@ Abstract type for paths or handles that can be resolved to a `H`.
 
 All non-`AbstractHandle` subtypes must implement [`handle`](@ref).
 """
-const AbstractResolvable{H} = _AbstractResolvable{AbstractHandle{H}}
+const AbstractResolvable{H <: AbstractHandle} = _AbstractResolvable{AbstractHandle{H}}
 
 """
     handle(x::AbstractResolvable{H}) :: H
@@ -41,3 +41,10 @@ Resolve `x` into a handle of type `H`.
 If `x` is already an `AbstractHandle`, it is returned unmodified.
 """
 function handle(h::AbstractHandle) h end
+
+"""
+    Unhandleable <: AbstractHandle
+
+Singleton handle type representing any resource that cannot be given a handle.
+"""
+struct Unhandleable <: AbstractHandle{Unhandleable} end

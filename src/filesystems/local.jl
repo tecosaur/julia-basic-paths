@@ -26,14 +26,9 @@ mutable struct LocalFileHandle <: AbstractFileHandle{LocalFilesystem, LocalFileH
     open::Bool
 end
 
+Base.isopen(h::LocalFileHandle) = h.open
+
 filesystem(::LocalFileHandle) = LocalFilesystem()
-
-"""
-    SystemPath <: PlatformPath
-
-An abstract type for paths that are native to the current operating system.
-"""
-abstract type SystemPath <: PlatformPath{LocalFileHandle} end
 
 const PureLocalFilepath = @static if Sys.iswindows()
     WindowsPath
@@ -48,7 +43,7 @@ Filesystem path referring to a location on the local filesystem.
 
 This type supports pure path manipulation independently of filesystem state.
 """
-struct LocalFilepath <: SystemPath
+struct LocalFilepath <: PlatformPath{LocalFileHandle}
     path::PureLocalFilepath
 end
 
@@ -61,6 +56,8 @@ function Base.parse(::Type{LocalFilepath}, str::AbstractString)
     LocalFilepath(parse(PureLocalFilepath, str))
 end
 
+Base.convert(P::Type{<:PlatformPath}, path::LocalFilepath) = convert(P, path.path)
+
 function Base.show(io::IO, path::LocalFilepath)
     print(io, "p\"")
     for (i, segment) in enumerate(path)
@@ -70,22 +67,23 @@ function Base.show(io::IO, path::LocalFilepath)
     print(io, '"')
 end
 
-struct DirEntry <: SystemPath
-    parent::LocalFileHandle
-    name::String
+const LocalRelpath = RelativePath{LocalFileHandle, LocalFilepath}
+
+struct DirEntry <: AbstractResolvable{LocalFileHandle}
+    rel::LocalRelpath
     type::UInt8
 end
 
-root(de::DirEntry) = root(de.parent)
-isabsolute(de::DirEntry) = isabsolute(de.parent)
-Base.parent(de::DirEntry) = convert(LocalFilepath, de.parent)
-Base.basename(de::DirEntry) = SubString(de.name)
-Base.length(de::DirEntry) = length(parent(de)) + 1
-function Base.convert(::Type{LocalFilepath}, de::DirEntry)
-    namep = PureLocalFilepath(GenericPlainPath{PureLocalFilepath}(de.name, 0, 0))
-    joinpath(parent(de), namep)
-end
-genericpath(de::DirEntry) = convert(LocalFilepath, de)
+# root(de::DirEntry) = root(de.parent)
+# isabsolute(de::DirEntry) = isabsolute(de.parent)
+# Base.parent(de::DirEntry) = convert(LocalFilepath, de.parent)
+# Base.basename(de::DirEntry) = SubString(de.name)
+# Base.length(de::DirEntry) = length(parent(de)) + 1
+# function Base.convert(::Type{LocalFilepath}, de::DirEntry)
+#     namep = PureLocalFilepath(GenericPlainPath{PureLocalFilepath}(de.name, 0, 0))
+#     joinpath(parent(de), namep)
+# end
+# genericpath(de::DirEntry) = convert(LocalFilepath, de)
 
 # Platform-specific implementations of the AbstractFilesystem interface
 @static if Sys.iswindows()

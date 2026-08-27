@@ -15,6 +15,7 @@ include("genericpath.jl")
 include("systems.jl")
 
 include("filesystems/local.jl")
+include("filesystems/memory.jl")
 
 include("macro.jl")
 

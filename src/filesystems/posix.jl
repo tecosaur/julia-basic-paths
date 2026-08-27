@@ -13,16 +13,16 @@ function handle(path::LocalFilepath, flags::Integer = O_PATH)
     p
 end
 
-function handle(dirent::DirEntry, flags::Integer = O_PATH)
-    checkopen(dirent.parent)
-    pfd = @ccall openat(dirent.parent.fd::RawFD, String(dirent.name)::Cstring, UInt32(flags)::Cint, 0::Cint)::RawFD
+function handle(rel::LocalRelpath, flags::Integer = O_PATH)
+    checkopen(rel.parent)
+    pfd = @ccall openat(rel.parent::RawFD, rel.path::Cstring, UInt32(flags)::Cint, 0::Cint)::RawFD
     reinterpret(Int32, pfd) < 0 && throw(SystemError("openat"))
     p = LocalFileHandle(pfd, flags, true)
     finalizer(close, p)
     p
 end
 
-Base.isopen(h::LocalFileHandle) = h.open
+handle(de::DirEntry, flags::Integer = O_PATH) = handle(de.rel, flags)
 
 function checkopen(hdl::LocalFileHandle)
     if !isopen(hdl)
@@ -251,7 +251,8 @@ function Base.iterate(reader::DirReader, ::Nothing)
         ispseudopath(name_ptr) && continue
         name = unsafe_string(name_ptr)
         kind = unsafe_load(Ptr{UInt8}(dent) + dentheader - sizeof(UInt8))
-        return DirEntry(reader.dir, name, kind), nothing
+        namepath = PureLocalFilepath(GenericPlainPath{PureLocalFilepath}(name, 0, 0))
+        return DirEntry(LocalRelpath(reader.dir, namepath), kind), nothing
     end
 end
 

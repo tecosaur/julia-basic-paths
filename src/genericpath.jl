@@ -1,6 +1,6 @@
 # Implementation of the `GenericPlainPath` type and its methods.
 
-struct GenericPlainPath{P <: PlainPath} <: PlainPath{Nothing}
+struct GenericPlainPath{P <: PlainPath} <: PlainPath{Unhandleable}
     data::String
     rootsep::UInt16
     lastsep::UInt16
