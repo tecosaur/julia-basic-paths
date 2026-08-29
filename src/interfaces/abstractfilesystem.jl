@@ -119,11 +119,7 @@ function (m::MapReducer)(node, entries)
     else
         m.leaffn(entry)
     end
-    peeled = Iterators.peel(entries)
-    isnothing(peeled) && return m.leaffn(node)
-    first, rest = peeled
-    values = Iterators.flatten(((value(first),), Iterators.map(value, rest)))
-    m.mergefn(m.branchfn(node), m.reducefn(values))
+    m.mergefn(m.branchfn(node), m.reducefn(Iterators.map(value, entries)))
 end
 
 """
@@ -132,16 +128,20 @@ end
 
 Traverse a filesystem, accumulating mapped values.
 
-The `branchfn -> B` transformation is applied to each node with children, and the
-`leaffn -> L` transformation is applied to each leaf node. The results are then
-reduced with either `reduceop` or `mergefn(B, reducefn(L...))`.
+The `branchfn -> B` transformation is applied to each node whose children are
+enumerated (a branch, even if it turns out to have no children), and the
+`leaffn -> L` transformation is applied to every other node (a leaf). The
+results are then reduced with either `reduceop`, folding the children's values
+onto the branch value (`reduce(reduceop, L..., init = B)`), or
+`mergefn(B, reducefn(L...))`, where `reducefn` must handle an empty iterator.
 
 The traversal is a complete fold of the tree: it cannot stop early, visits
 entries in no particular order (so `reducefn`/`reduceop` should be
 associative), and does not expose depth. Entries are only guaranteed valid
 within the calls made for the directory that contains them; resolve anything
-you want to keep (such as a path or `stat`) inside `leaffn`. If `reduceop` is used, it should be a binary function that combines
-two leaf values (`reduceop(::L, ::L)`). If `reducefn` is used, it is supplied an
+you want to keep (such as a path or `stat`) inside `leaffn`. If `reduceop` is
+used, it should be a binary function that combines two values
+(`reduceop(::L, ::L)`). If `reducefn` is used, it is supplied a single-pass
 iterator of leaf values.
 
 When using `reduceop`, it is possible to omit `branchfn` for convenience, in
@@ -155,10 +155,10 @@ Count the total number of locations one may reach from a path:
 numdest(path) = mapreducepath(_ -> 1, +, path)
 ```
 
-Count only the number of branch points under a path:
+Count only the number of directories entered under a path:
 
 ```julia
-numbranches(path) = mapreducepath(_ -> 1, _ -> 0, +, path)
+numdirs(path) = mapreducepath(_ -> 1, _ -> 0, +, path)
 ```
 
 List the names of all leaves under a path, accumulating into one vector per
@@ -179,7 +179,7 @@ mapreducepath(branchfn::FB, leaffn::FL, mergefn::FM, reducefn::FR, path::Path; d
     MapReducer(branchfn, leaffn, mergefn, reducefn, descendif, followlinks)(path)
 
 mapreducepath(branchfn::FB, leaffn::FL, op::FO, path::Path; descendif::FD = Returns(true), followlinks::Bool = false) where {FB <: Function, FL <: Function, FO <: Function, FD <: Function} =
-    mapreducepath(branchfn, leaffn, op, Base.Fix1(reduce, op), path; descendif, followlinks)
+    mapreducepath(branchfn, leaffn, (b, vs) -> reduce(op, vs; init = b), identity, path; descendif, followlinks)
 
 mapreducepath(nodefn::FN, op::FO, path::Path; descendif::FD = Returns(true), followlinks::Bool = false) where {FN <: Function, FO <: Function, FD <: Function} =
     mapreducepath(nodefn, nodefn, op, path; descendif, followlinks)
