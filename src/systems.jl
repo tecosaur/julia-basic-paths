@@ -72,15 +72,13 @@ end
 # Posix
 
 Base.@assume_effects :foldable function validate_path(::Type{InvalidSegment{T}}, ::Type{PosixPath}, segment::AbstractString, multipart::Bool = true) where {T <: PlatformPath}
-    if segment == ""
+    if isempty(segment)
         InvalidSegment{T}(segment, :empty)
-    elseif segment == "." && !multipart
+    elseif !multipart && (segment == "." || segment == "..")
         InvalidSegment{T}(segment, :reserved)
-    elseif segment == ".." && !multipart
-        InvalidSegment{T}(segment, :reserved)
-    elseif '\0' in segment
+    elseif 0x00 in codeunits(segment)
         InvalidSegment{T}(segment, :char, '\0')
-    elseif '/' in segment && !multipart
+    elseif !multipart && UInt8('/') in codeunits(segment)
         InvalidSegment{T}(segment, :separator, '/')
     end
 end
@@ -96,47 +94,20 @@ end
 
 function PosixPath(components::AbstractVector{<:AbstractString})
     isempty(components) && throw(EmptyPath{PosixPath}())
-    pathbuf, rootsep, lastsep = IOBuffer(), 0, 0
-    i = firstindex(components)
-    if first(components) == string(separator(PosixPath))
-        print(pathbuf, separator(PosixPath))
-        rootsep = 1
-        i = nextind(components, i)
-    else
-        while i <= lastindex(components) && components[i] == pseudoparent(PosixPath)
-            lastsep = position(pathbuf)
-            print(pathbuf, pseudoparent(PosixPath), separator(PosixPath))
-            i = nextind(components, i)
-        end
+    rooted = first(components) == "/"
+    foreach(Iterators.dropwhile(c -> c == ".." && !rooted, Iterators.drop(components, rooted))) do component
+        validate_path(PosixPath, component, false)
     end
-    while i <= lastindex(components)
-        validate_path(PosixPath, components[i])
-        lastsep = position(pathbuf)
-        print(pathbuf, components[i], separator(PosixPath))
-        i = nextind(components, i)
-    end
-    truncate(pathbuf, position(pathbuf) - 1)
-    PosixPath(GenericPlainPath{PosixPath}(String(take!(pathbuf)), rootsep, lastsep))
+    PosixPath(join(components, '/'))
 end
 
 Base.@assume_effects :foldable function PosixPath(path::String)
-    npath = normpath(path)
-    if npath != "/"
-        npath = String(rstrip(normpath(path), separator(PosixPath)))
-        for segment in eachsplit(npath, separator(PosixPath), keepempty=false)
-            segment ∈ (pseudoself(PosixPath), pseudoparent(PosixPath)) && continue
-            validate_path(PosixPath, segment)
-        end
-    end
-    rootsep = first(npath) == separator(PosixPath)
-    lastsep = something(findlast(==(separatorbyte(PosixPath)), codeunits(npath)), 0)
-    PosixPath(GenericPlainPath{PosixPath}(npath, rootsep, ifelse(lastsep > 1, lastsep, 0)))
+    (; data, rootsep, lastsep) = parsepath(path, Int(startswith(path, '/')); separators = ('/',),
+                                                validate = segment -> validate_path(PosixPath, segment, false))
+    PosixPath(GenericPlainPath{PosixPath}(data, rootsep, lastsep))
 end
 
-function Base.parse(::Type{PosixPath}, path::String)
-    validate_path(PosixPath, path, true)
-    PosixPath(path)
-end
+Base.parse(::Type{PosixPath}, path::AbstractString) = PosixPath(String(path))
 
 # Windows
 
@@ -175,46 +146,83 @@ end
 
 function WindowsPath(components::AbstractVector{<:AbstractString})
     isempty(components) && throw(EmptyPath{WindowsPath}())
-    pathbuf, rootsep, lastsep = IOBuffer(), 0, 0
-    i = firstindex(components)
-    drivematch = match(WINDOWS_DRIVE_RE, first(components))
-    if ncodeunits(something(drivematch.captures[1])) == ncodeunits(first(components))
-        print(pathbuf, first(components))
-        rootsep = ncodeunits(first(components)) + 1
-        i = nextind(components, i)
-    else
-        while i <= lastindex(components) && components[i] == pseudoparent(WindowsPath)
-            lastsep = position(pathbuf)
-            print(pathbuf, pseudoparent(WindowsPath), separator(WindowsPath))
-            i = nextind(components, i)
-        end
+    rooted = ncodeunits(windowsdrive(first(components))) == ncodeunits(first(components))
+    foreach(Iterators.dropwhile(c -> c == ".." && !rooted, Iterators.drop(components, rooted))) do component
+        validate_path(WindowsPath, component, false)
     end
-    while i <= lastindex(components)
-        validate_path(WindowsPath, components[i])
-        lastsep = position(pathbuf)
-        print(pathbuf, components[i], separator(WindowsPath))
-        i = nextind(components, i)
-    end
-    truncate(pathbuf, position(pathbuf) - 1)
-    WindowsPath(GenericPlainPath{WindowsPath}(String(take!(pathbuf)), rootsep, lastsep))
+    WindowsPath(join(components, '\\'))
 end
 
 Base.@assume_effects :foldable function WindowsPath(path::String)
-    function splitdrive_w(p::AbstractString)
-        m = match(WINDOWS_DRIVE_RE, p)::AbstractMatch
-        String(something(m.captures[1])), String(something(m.captures[2]))
-    end
-    npath = replace(rstrip(normpath(path), ('/', '\\')), '/' => separator(WindowsPath))
-    drive, rest = splitdrive_w(npath)
-    for segment in eachsplit(rest, separator(WindowsPath), keepempty=false)
-        validate_path(WindowsPath, segment)
-    end
-    rootsep = if isempty(drive) 0 else ncodeunits(drive) + 1 end
-    lastsep = something(findlast(==(separatorbyte(WindowsPath)), codeunits(npath)), 0)
-    WindowsPath(GenericPlainPath{WindowsPath}(npath, rootsep, lastsep))
+    (; data, rootsep, lastsep) = parsepath(path, ncodeunits(windowsdrive(path)); separators = ('\\', '/'),
+                                                validate = segment -> validate_path(WindowsPath, segment, false))
+    WindowsPath(GenericPlainPath{WindowsPath}(data, rootsep, lastsep))
 end
 
-function Base.parse(::Type{WindowsPath}, path::String)
-    validate_path(WindowsPath, path, true)
-    WindowsPath(path)
+windowsdrive(path::AbstractString) = something(match(WINDOWS_DRIVE_RE, path).captures[1])
+
+Base.parse(::Type{WindowsPath}, path::AbstractString) = WindowsPath(String(path))
+
+"""
+    parsepath(path::String, rootlen::Int; separators, validate, pseudoself = ".", pseudoparent = "..")
+        -> (; data::String, rootsep::Int, lastsep::Int)
+
+Parse `path` into the fields of a normalised `GenericPlainPath`, with its first
+`rootlen` bytes taken as its root.
+
+Any of `separators` is accepted in `path`; the result uses the first only,
+contains no empty or `pseudoself` segments nor trailing separator, and has
+`pseudoparent` segments collapsed against the segments before them (or the
+root, which is a fixed point). Each remaining segment is passed to `validate`.
+An empty result becomes `pseudoself`.
+
+When `path` is already normalised, it is used as `data` without copying.
+"""
+function parsepath(path::String, rootlen::Int; separators::Tuple{Vararg{Char}}, validate::F,
+                   pseudoself::String = ".", pseudoparent::String = "..") where {F}
+    sepbytes = map(UInt8, separators)
+    sep = first(sepbytes)
+    rootsep = if iszero(rootlen) 0 else rootlen + (codeunit(path, rootlen) != sep) end
+    function materialise(n::Int)
+        buf = Base._string_n(ncodeunits(path))
+        GC.@preserve buf for i in 1:n
+            byte = codeunit(path, i)
+            unsafe_store!(pointer(buf, i), if byte in sepbytes sep else byte end)
+        end
+        buf
+    end
+    inplace = !any(b -> b in sepbytes && b != sep, codeunits(SubString(path, 1, rootlen)))
+    out = if inplace path else materialise(rootlen) end
+    n, parentsend, i = rootlen, 0, rootlen + 1
+    while i <= ncodeunits(path)
+        j = something(findnext(in(sepbytes), codeunits(path), i), ncodeunits(path) + 1)
+        segment, segstart = SubString(path, i - 1, j - i, Val(:noshift)), i
+        i = j + 1
+        if isempty(segment) || segment == pseudoself
+            continue
+        elseif segment == pseudoparent
+            if n > max(rootlen, parentsend)
+                n = max(something(findprev(==(sep), codeunits(out), n), 1) - 1, rootlen)
+                continue
+            end
+            iszero(rootlen) || continue
+        else
+            validate(segment)
+        end
+        needsep = n > 0 && codeunit(out, n) != sep
+        start = n + needsep + 1
+        if inplace && segstart == start && (!needsep || codeunit(path, n + 1) == sep)
+            n = start + ncodeunits(segment) - 1
+        else
+            if inplace
+                out, inplace = materialise(n), false
+            end
+            needsep && GC.@preserve out unsafe_store!(pointer(out, n + 1), sep)
+            n = start + Base.__unsafe_string!(out, segment, start) - 1
+        end
+        segment == pseudoparent && (parentsend = n)
+    end
+    data = if iszero(n) pseudoself elseif n == ncodeunits(out) out else GC.@preserve out unsafe_string(pointer(out), n) end
+    lastsep = something(findlast(==(sep), codeunits(data)), 0)
+    (; data, rootsep, lastsep = if lastsep > rootsep lastsep else 0 end)
 end

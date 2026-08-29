@@ -86,7 +86,8 @@ function Base.startswith(a::P, b::P) where {P <: PlainPath}
     elseif ncodeunits(astr) == ncodeunits(bstr)
         astr == bstr
     else
-        startswith(astr, bstr) && codeunit(astr, ncodeunits(bstr) + 1) == separatorbyte(P)
+        startswith(astr, bstr) && (endswith(bstr, separator(P)) ||
+                                   codeunit(astr, ncodeunits(bstr) + 1) == separatorbyte(P))
     end
 end
 
@@ -103,6 +104,11 @@ function Base.endswith(a::P, b::P) where {P <: PlainPath}
         endswith(astr, bstr) && codeunit(astr, ncodeunits(astr) - ncodeunits(bstr)) == separatorbyte(P)
     end
 end
+
+Base.print(io::IO, p::PlainPath) = print(io, String(p))
+Base.broadcastable(p::PlainPath) = Ref(p)
+Base.arg_gen(p::PlainPath) = [String(p)]
+Base.cconvert(::Type{Cstring}, p::PlainPath) = String(p)
 
 # Exceptions
 
