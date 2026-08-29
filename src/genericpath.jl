@@ -14,7 +14,7 @@ function root(path::GenericPlainPath{P}) where {P <: PlainPath}
     elseif ncodeunits(path.data) == path.rootsep
         path
     else
-        GenericPlainPath{P}(String(SubString(path.data, 0, path.rootsep + isone(path.rootsep) - 1, Val(:noshift))), path.rootsep, 0)
+        GenericPlainPath{P}(String(Base.raw_substring(path.data, 1, path.rootsep + isone(path.rootsep) - 1)), path.rootsep, 0)
     end
 end
 
@@ -37,13 +37,13 @@ function Base.parent(path::GenericPlainPath{P}) where {P <: PlainPath}
         GenericPlainPath{P}(path.data * separator(P) * pseudoparent(P), path.rootsep, path.lastsep + ncodeunits(pseudoparent(P)) + 1)
     else # Some multi-segment path
         priorsep = something(findprev(==(separatorbyte(P)), codeunits(path.data), path.lastsep - 1), 0)
-        GenericPlainPath{P}(String(SubString(path.data, 0, max(1, path.lastsep - 1), Val(:noshift))), path.rootsep,
+        GenericPlainPath{P}(String(Base.raw_substring(path.data, 1, max(1, path.lastsep - 1))), path.rootsep,
                             if priorsep > path.rootsep priorsep else 0 end)
     end
 end
 
 function Base.basename(path::GenericPlainPath{P}) where {P <: PlainPath}
-    bname = SubString(path.data, Int(path.lastsep), ncodeunits(path.data) - path.lastsep, Val(:noshift))
+    bname = Base.raw_substring(path.data, path.lastsep + 1, ncodeunits(path.data) - path.lastsep)
     if bname != pseudoparent(P)
         bname
     end
@@ -65,7 +65,7 @@ function Base.iterate(path::GenericPlainPath{P}, start::Int) where {P}
     else
         nextsep - start - !(isone(nextsep) && isone(path.rootsep)), nextsep
     end
-    SubString(path.data, start, stop, Val(:noshift)), nextstart
+    Base.raw_substring(path.data, start + 1, stop), nextstart
 end
 
 struct AbsolutePathError{P <: GenericPlainPath} <: Exception
@@ -136,7 +136,7 @@ Base.@assume_effects :foldable function joinpsudoparent(a::GenericPlainPath{P}, 
     sep, parentseg = separatorbyte(P), pseudoparent(P)
     plen, blen = ncodeunits(parentseg), ncodeunits(b.data)
     nparents, bstart = 0, 1
-    while bstart + plen - 1 <= blen && SubString(b.data, bstart - 1, plen, Val(:noshift)) == parentseg &&
+    while bstart + plen - 1 <= blen && Base.raw_substring(b.data, bstart, plen) == parentseg &&
           (bstart + plen > blen || codeunit(b.data, bstart + plen) == sep)
         nparents += 1
         bstart += plen + 1

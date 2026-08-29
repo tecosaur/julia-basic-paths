@@ -196,7 +196,7 @@ function parsepath(path::String, rootlen::Int; separators::Tuple{Vararg{Char}}, 
     n, parentsend, i = rootlen, 0, rootlen + 1
     while i <= ncodeunits(path)
         j = something(findnext(in(sepbytes), codeunits(path), i), ncodeunits(path) + 1)
-        segment, segstart = SubString(path, i - 1, j - i, Val(:noshift)), i
+        segment, segstart = Base.raw_substring(path, i, j - i), i
         i = j + 1
         if isempty(segment) || segment == pseudoself
             continue
