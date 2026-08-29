@@ -102,7 +102,7 @@ macro p_str(raw_path::String, flags...)
         cstr = if length(strparts) == 1
             first(strparts)
         else
-            Expr(:call, :joinpath, filter(!isnothing, strparts)...)
+            Expr(:call, :*, strparts...)
         end
         quote
             let $var = $(esc(val))
@@ -115,7 +115,7 @@ macro p_str(raw_path::String, flags...)
                     $patherr
                     $var
                 else
-                    throw(ArgumentError("Invalid path component type: $var of type $(typeof($var)), should be an AbstractString or LocalFilepath"))
+                    throw(ArgumentError("Invalid path component type: $($var) of type $(typeof($var)), should be an AbstractString or LocalFilepath"))
                 end
             end
         end
@@ -147,7 +147,7 @@ macro p_str(raw_path::String, flags...)
             if idx <= ncodeunits(path) && path[idx] != '/'
                 sesc = false
                 sidx = idx
-                while sidx < ncodeunits(path)
+                while sidx <= ncodeunits(path)
                     if path[sidx] == '/'
                         break
                     elseif sesc

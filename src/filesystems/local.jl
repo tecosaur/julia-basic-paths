@@ -47,10 +47,13 @@ struct LocalFilepath <: PlatformPath{LocalFileHandle}
     path::PureLocalFilepath
 end
 
-separator(::LocalFilepath) = separator(PureLocalFilepath)
+separator(::Type{LocalFilepath}) = separator(PureLocalFilepath)
 genericpath(path::LocalFilepath) = genericpath(path.path)
+validate_path(::Type{InvalidSegment{T}}, ::Type{LocalFilepath}, segment::AbstractString, multipart::Bool = true) where {T <: PlatformPath} =
+    validate_path(InvalidSegment{T}, PureLocalFilepath, segment, multipart)
 
-LocalFilepath(args...) = LocalFilepath(PureLocalFilepath(args...))
+LocalFilepath(path::AbstractString) = LocalFilepath(PureLocalFilepath(path))
+LocalFilepath(components::AbstractVector{<:AbstractString}) = LocalFilepath(PureLocalFilepath(components))
 
 function Base.parse(::Type{LocalFilepath}, str::AbstractString)
     LocalFilepath(parse(PureLocalFilepath, str))

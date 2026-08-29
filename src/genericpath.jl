@@ -245,6 +245,8 @@ function generic_rewrap(f::F, path::T) where {F <: Function, T <: PlainPath}
     end
 end
 
+Base.joinpath(a::PlainPath, b::PlainPath, rest::PlainPath...) = joinpath(joinpath(a, b), rest...)
+
 function Base.joinpath(a::T, b::PlainPath) where {T <: PlainPath}
     cgp = joinpath(genericpath(a), genericpath(b))
     P = if cgp isa GenericPlainPath
