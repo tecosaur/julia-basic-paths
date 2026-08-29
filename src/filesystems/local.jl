@@ -77,16 +77,7 @@ struct DirEntry <: AbstractResolvable{LocalFileHandle}
     type::UInt8
 end
 
-# root(de::DirEntry) = root(de.parent)
-# isabsolute(de::DirEntry) = isabsolute(de.parent)
-# Base.parent(de::DirEntry) = convert(LocalFilepath, de.parent)
-# Base.basename(de::DirEntry) = SubString(de.name)
-# Base.length(de::DirEntry) = length(parent(de)) + 1
-# function Base.convert(::Type{LocalFilepath}, de::DirEntry)
-#     namep = PureLocalFilepath(GenericPlainPath{PureLocalFilepath}(de.name, 0, 0))
-#     joinpath(parent(de), namep)
-# end
-# genericpath(de::DirEntry) = convert(LocalFilepath, de)
+Base.basename(entry::DirEntry) = basename(entry.rel.path)
 
 # Platform-specific implementations of the AbstractFilesystem interface
 @static if Sys.iswindows()

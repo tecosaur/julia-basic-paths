@@ -2,6 +2,9 @@
 const AT_EMPTY_PATH = 0x1000
 const O_PATH = 0x00200000
 const AT_FDCWD = -100
+const AT_SYMLINK_NOFOLLOW = 0x100
+
+using Base.Filesystem: JL_O_RDONLY, JL_O_DIRECTORY, JL_O_NOFOLLOW, JL_O_CLOEXEC
 
 Base.cconvert(::Type{RawFD}, hdl::LocalFileHandle) = hdl.fd
 
@@ -67,36 +70,48 @@ end
 
 # TODO
 
-function Base.open(hdl::LocalFileHandle; lock = true,
-    read     :: Union{Bool,Nothing} = nothing,
-    write    :: Union{Bool,Nothing} = nothing,
-    create   :: Union{Bool,Nothing} = nothing,
-    truncate :: Union{Bool,Nothing} = nothing,
-    append   :: Union{Bool,Nothing} = nothing,
-)
-    flagopts = Base.open_flags(
-        read = read,
-        write = write,
-        create = create,
-        truncate = truncate,
-        append = append,
-    )
-    flags = 0x0000
-    if flagopts.read && (flagopts.write || flagopts.append)
-        flags |= Base.Filesystem.JL_O_RDWR
-    elseif flagopts.read
-        flags |= Base.Filesystem.JL_O_RDONLY
-    elseif flagopts.write
-        flags |= Base.Filesystem.JL_O_WRONLY
+function openflags(; read     :: Union{Bool, Nothing} = nothing,
+                     write    :: Union{Bool, Nothing} = nothing,
+                     create   :: Union{Bool, Nothing} = nothing,
+                     truncate :: Union{Bool, Nothing} = nothing,
+                     append   :: Union{Bool, Nothing} = nothing)
+    opts = Base.open_flags(; read, write, create, truncate, append)
+    flags = if opts.read && (opts.write || opts.append)
+        Base.Filesystem.JL_O_RDWR
+    elseif opts.write
+        Base.Filesystem.JL_O_WRONLY
+    else
+        Base.Filesystem.JL_O_RDONLY
     end
-    flagopts.append && (flags |= Base.Filesystem.JL_O_APPEND)
-    flagopts.truncate && (flags |= Base.Filesystem.JL_O_TRUNC)
-    if hdl.flags == flags
+    opts.create && (flags |= Base.Filesystem.JL_O_CREAT)
+    opts.append && (flags |= Base.Filesystem.JL_O_APPEND)
+    opts.truncate && (flags |= Base.Filesystem.JL_O_TRUNC)
+    flags
+end
+
+function Base.open(hdl::LocalFileHandle; lock::Bool = true, kwargs...)
+    flags = openflags(; kwargs...)
+    io = if hdl.flags == flags
         fdio(reinterpret(Int32, hdl.fd), false)
     else
         fdio(reinterpret(Int32, reopen(hdl, flags).fd), true)
     end
+    io._dolock = lock
+    io
 end
+
+function openio(dirfd::RawFD, name; lock::Bool = true, kwargs...)
+    flags = openflags(; kwargs...) | JL_O_CLOEXEC
+    fd = @ccall openat(dirfd::RawFD, name::Cstring, flags::Cint, 0o666::Cint)::RawFD
+    reinterpret(Int32, fd) < 0 && throw(SystemError("openat"))
+    io = fdio(reinterpret(Int32, fd), true)
+    io._dolock = lock
+    io
+end
+
+Base.open(rel::LocalRelpath; kwargs...) = (checkopen(rel.parent); openio(rel.parent.fd, rel.path; kwargs...))
+Base.open(entry::DirEntry; kwargs...) = open(entry.rel; kwargs...)
+Base.open(path::LocalFilepath; kwargs...) = openio(RawFD(AT_FDCWD), path; kwargs...)
 
 # Stat
 
@@ -177,87 +192,99 @@ end
 
 # Directory iterator
 
+const DIRECTORY_FLAGS = JL_O_RDONLY | JL_O_DIRECTORY | JL_O_CLOEXEC
+
+"""
+    DirReader
+
+Iterator over the entries of a directory stream, yielding `DirEntry`s relative
+to `dir`. The stream is closed once exhausted, or by `close`, and reopened from
+`dir` when iterated again; when `ownsdir`, `dir` wraps the stream's own
+descriptor and is closed with it, so the reader cannot be restarted.
+"""
 mutable struct DirReader
     const dir::LocalFileHandle
+    const ownsdir::Bool
     dirp::Ptr{Cvoid}
-    open::Bool
-    start::Bool
 end
 
-function DirReader(path::LocalFileHandle)
-    reader = DirReader(path, C_NULL, false, true)
-    finalizer(close, reader)
-    reader
+DirReader(dir::LocalFileHandle, fd::RawFD, ownsdir::Bool) =
+    finalizer(close, DirReader(dir, ownsdir, fdopendir(fd)))
+
+function fdopendir(fd::RawFD)
+    dirp = @ccall fdopendir(fd::RawFD)::Ptr{Cvoid}
+    dirp == C_NULL && throw(SystemError("fdopendir"))
+    dirp
 end
 
-function children(path::LocalFileHandle)
-    if isdir(path)
-        DirReader(path)
-    end
-end
-
-function children(path::AbstractResolvable{LocalFileHandle})
-    children(handle(path))
-end
+Base.isopen(reader::DirReader) = reader.dirp != C_NULL
+Base.IteratorSize(::Type{DirReader}) = Base.SizeUnknown()
+Base.eltype(::Type{DirReader}) = DirEntry
 
 function Base.close(reader::DirReader)
-    if !reader.open || reader.dirp == C_NULL
-        return
-    end
-    reader.open = false
-    err = @ccall closedir(reader.dirp::Ptr{Cvoid})::Int32
-    if err < 0
-        throw(SystemError("closedir"))
-    end
+    isopen(reader) || return
+    dirp, reader.dirp = reader.dirp, C_NULL
+    reader.ownsdir && (reader.dir.open = false)
+    @ccall(closedir(dirp::Ptr{Cvoid})::Cint) < 0 && throw(SystemError("closedir"))
 end
 
+function opendir(dirfd::RawFD, name)
+    fd = @ccall openat(dirfd::RawFD, name::Cstring, DIRECTORY_FLAGS::Cint, 0::Cint)::RawFD
+    reinterpret(Int32, fd) >= 0 && return fd
+    Libc.errno() in (Libc.ENOTDIR, Libc.ELOOP) || throw(SystemError("openat"))
+    nothing
+end
+
+function children(dir::LocalFileHandle)
+    checkopen(dir)
+    fd = opendir(dir.fd, ".")
+    if !isnothing(fd) DirReader(dir, fd, false) end
+end
+
+ownedreader(::Nothing) = nothing
+ownedreader(fd::RawFD) = DirReader(LocalFileHandle(fd, DIRECTORY_FLAGS, true), fd, true)
+
+children(rel::LocalRelpath) = (checkopen(rel.parent); ownedreader(opendir(rel.parent.fd, rel.path)))
+children(entry::DirEntry) = children(entry.rel)
+children(path::LocalFilepath) = ownedreader(opendir(RawFD(AT_FDCWD), path))
+
+const DENT_TYPE_OFFSET = sizeof(UInt64) + sizeof(UInt64) + sizeof(UInt16)
+const DENT_NAME_OFFSET = DENT_TYPE_OFFSET + sizeof(UInt8)
+
 function Base.iterate(reader::DirReader)
-    if !reader.open
-        checkopen(reader.dir)
-        pathcopy = reopen(reader.dir, Base.Filesystem.JL_O_RDONLY)
-        dirp = @ccall fdopendir(pathcopy.fd::RawFD)::Ptr{Cvoid}
-        dirp === C_NULL && throw(SystemError("fdopendir"))
-        reader.dirp = dirp
-        reader.open = true
-        reader.start = true
-    end
-    if reader.start
-        reader.start = false
+    if isopen(reader)
+        @ccall rewinddir(reader.dirp::Ptr{Cvoid})::Cvoid
+    elseif reader.ownsdir
+        throw(ArgumentError("Cannot restart a directory reader whose directory has been closed"))
     else
-        err = @ccall rewinddir(reader.dirp::Ptr{Cvoid})::Int32
-        err < 0 && throw(SystemError("rewinddir"))
+        checkopen(reader.dir)
+        reader.dirp = fdopendir(opendir(reader.dir.fd, "."))
     end
     iterate(reader, nothing)
 end
 
 function Base.iterate(reader::DirReader, ::Nothing)
-    function ispseudopath(ptr::Ptr{UInt8})
-        unsafe_load(ptr) == UInt8('.') || return false
-        nextchar = unsafe_load(ptr + 1)
-        nextchar == 0 && return true
-        nextchar == UInt8('.') && unsafe_load(ptr + 2) == 0 && return true
-        false
+    function ispseudopath(name::Ptr{UInt8})
+        unsafe_load(name) == UInt8('.') || return false
+        second = unsafe_load(name + 1)
+        second == 0 || second == UInt8('.') && unsafe_load(name + 2) == 0
     end
-    reader.open || return
-    # FIXME: Hardcoded `dentheader`
-    dentheader = sizeof(UInt64) + sizeof(UInt64) + sizeof(UInt16) + sizeof(UInt8)
+    isopen(reader) || return
     while true
+        Libc.errno(0)
         dent = @ccall readdir(reader.dirp::Ptr{Cvoid})::Ptr{Cvoid}
-        if dent === C_NULL
+        if dent == C_NULL
+            err = Libc.errno()
             close(reader)
+            iszero(err) || throw(SystemError("readdir", err))
             return
         end
-        name_ptr = Ptr{UInt8}(dent) + dentheader
-        ispseudopath(name_ptr) && continue
-        name = unsafe_string(name_ptr)
-        kind = unsafe_load(Ptr{UInt8}(dent) + dentheader - sizeof(UInt8))
-        namepath = PureLocalFilepath(GenericPlainPath{PureLocalFilepath}(name, 0, 0))
-        return DirEntry(LocalRelpath(reader.dir, namepath), kind), nothing
+        name = Ptr{UInt8}(dent) + DENT_NAME_OFFSET
+        ispseudopath(name) && continue
+        path = LocalFilepath(PureLocalFilepath(GenericPlainPath{PureLocalFilepath}(unsafe_string(name), 0, 0)))
+        return DirEntry(LocalRelpath(reader.dir, path), unsafe_load(Ptr{UInt8}(dent) + DENT_TYPE_OFFSET)), nothing
     end
 end
-
-Base.IteratorSize(::Type{DirReader}) = Base.SizeUnknown()
-Base.eltype(::Type{DirReader}) = DirEntry
 
 const DENT_TYPES = (
     unknown = 0,
@@ -271,28 +298,32 @@ const DENT_TYPES = (
     whiteout = 14,
 )
 
+Base.islink(entry::DirEntry) =
+    if entry.type == DENT_TYPES.unknown islink(lstat(entry)) else entry.type == DENT_TYPES.link end
+
 for (func, dtval) in ((:isfifo, :fifo),
                       (:ischardev, :chardev),
                       (:isdir, :dir),
                       (:isblockdev, :blockdev),
                       (:isfile, :regular),
-                      (:islink, :link),
                       (:issocket, :socket))
-    @eval function Base.$func(de::DirEntry)
-        if de.type == DENT_TYPES.unknown
-            return Base.$func(stat(de))
+    @eval function Base.$func(entry::DirEntry)
+        if entry.type in (DENT_TYPES.unknown, DENT_TYPES.link)
+            $func(stat(entry))
+        else
+            entry.type == DENT_TYPES.$dtval
         end
-        de.type == DENT_TYPES.$dtval
     end
 end
 
-function Base.stat(de::DirEntry)
-    checkopen(de.parent)
+Base.stat(entry::DirEntry) = fstatat(entry, 0)
+Base.lstat(entry::DirEntry) = fstatat(entry, AT_SYMLINK_NOFOLLOW)
+
+function fstatat(entry::DirEntry, flags::Integer)
+    checkopen(entry.rel.parent)
     statbuf = fill!(Memory{UInt8}(undef, Int(ccall(:jl_sizeof_stat, Int32, ()))), 0x00)
-    err = @ccall fstatat(de.parent.fd::Cint, de.name::Cstring, statbuf::Ptr{UInt8}, 0::Cint)::Int32
-    if err < 0
-        throw(SystemError("fstatat"))
-    end
+    err = @ccall fstatat(entry.rel.parent.fd::RawFD, entry.rel.path::Cstring, statbuf::Ptr{UInt8}, flags::Cint)::Int32
+    err < 0 && throw(SystemError("fstatat"))
     statinterpret("<DirEntry>", statbuf, err)
 end
 

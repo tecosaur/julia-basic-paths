@@ -20,7 +20,7 @@ the filesystem `F`.
 ```julia
 open(::AbstractFileHandle; lock, read, write, create, truncate, append) :: IO
 stat(::AbstractFileHandle) :: StatStruct
-children(::AbstractFileHandle) :: Union{Nothing, <:AbstractResolvable{<:AbstractFileHandle}}
+children(::AbstractFileHandle) :: Union{Nothing, iterator of AbstractResolvable{<:AbstractFileHandle}}
 ```
 
 **Generic derived methods:**
@@ -109,50 +109,26 @@ struct MapReducer{BF, LF, MF, RF, DF}
     followlinks::Bool
 end
 
-function (m::MapReducer)(path::Path)
-    childs = children(path)
-    childstate = iterate(childs)
-    isnothing(childstate) && return m.leaffn(path)
-    # Obtain first value
-    thischild, childitr = childstate
-    leafacc = if islink(thischild)
-        if m.followlinks && isdir(thischild)
-            m(thischild)
-        else
-            m.leaffn(thischild)
-        end
-    elseif isdir(thischild) && m.descendif(thischild)
-        m(thischild)
+(m::MapReducer)(node) = m(node, children(node))
+
+# REVIEW: thread a per-directory context (branchfn's value) down to leaffn/descendif, for paths, depth, and inherited rules
+function (m::MapReducer)(node, entries)
+    isnothing(entries) && return m.leaffn(node)
+    value(entry) = if (m.followlinks || !islink(entry)) && isdir(entry) && m.descendif(entry)
+        m(entry)
     else
-        m.leaffn(thischild)
+        m.leaffn(entry)
     end
-    applicable(close, thischild) && close(thischild)
-    # Reduce remaining values
-    childstate = iterate(childs, childitr)
-    while !isnothing(childstate)
-        thischild, childitr = childstate
-        childstate = iterate(childs, childitr)
-        leafval = if islink(thischild)
-            if m.followlinks && isdir(thischild)
-                m(thischild)
-            else
-                m.leaffn(thischild)
-            end
-        elseif isdir(thischild) && m.descendif(thischild)
-            m(thischild)
-        else
-            m.leaffn(thischild)
-        end
-        applicable(close, thischild) && close(thischild)
-        leafacc = m.reducefn(leafacc, leafval)
-    end
-    # Merge to final value
-    m.mergefn(m.branchfn(path), leafacc)
+    peeled = Iterators.peel(entries)
+    isnothing(peeled) && return m.leaffn(node)
+    first, rest = peeled
+    values = Iterators.flatten(((value(first),), Iterators.map(value, rest)))
+    m.mergefn(m.branchfn(node), m.reducefn(values))
 end
 
 """
-    mapreducepath(branchfn::Function, leaffn::Function, mergefn::Function, reducefn::Function, path::Path; [descendif::Function])
-    mapreducepath([branchfn::Function = leaffn], leaffn::Function, reduceop::Function, path::Path; [descendif::Function])
+    mapreducepath(branchfn::Function, leaffn::Function, mergefn::Function, reducefn::Function, path::Path; [descendif::Function, followlinks::Bool])
+    mapreducepath([branchfn::Function = leaffn], leaffn::Function, reduceop::Function, path::Path; [descendif::Function, followlinks::Bool])
 
 Traverse a filesystem, accumulating mapped values.
 
@@ -160,8 +136,11 @@ The `branchfn -> B` transformation is applied to each node with children, and th
 `leaffn -> L` transformation is applied to each leaf node. The results are then
 reduced with either `reduceop` or `mergefn(B, reducefn(L...))`.
 
-The traversal order is undefined, and so `reducefn`/`reduceop` should be
-associative. If `reduceop` is used, it should be a binary function that combines
+The traversal is a complete fold of the tree: it cannot stop early, visits
+entries in no particular order (so `reducefn`/`reduceop` should be
+associative), and does not expose depth. Entries are only guaranteed valid
+within the calls made for the directory that contains them; resolve anything
+you want to keep (such as a path or `stat`) inside `leaffn`. If `reduceop` is used, it should be a binary function that combines
 two leaf values (`reduceop(::L, ::L)`). If `reducefn` is used, it is supplied an
 iterator of leaf values.
 
@@ -182,10 +161,12 @@ Count only the number of branch points under a path:
 numbranches(path) = mapreducepath(_ -> 1, _ -> 0, +, path)
 ```
 
-List all possible destinations from a path:
+List the names of all leaves under a path, accumulating into one vector per
+directory:
 
 ```julia
-alldests(path) = mapreducepath(identity, identity, vcat, collect, path)
+leafnames(path) = mapreducepath(_ -> String[], p -> [String(basename(p))], (_, names) -> names,
+                                names -> reduce(append!, names; init = String[]), path)
 ```
 
 Find the most steps one could take starting from a path:
@@ -194,13 +175,11 @@ Find the most steps one could take starting from a path:
 maxdepth(path) = mapreducepath(_ -> nothing, _ -> 1, (_, dmax) -> dmax + 1, depths -> maximum(depths, init=0), path)
 ```
 """
-function mapreducepath(branchfn::FB, leaffn::FL, mergefn::FM, reducefn::FR, path::Path; descendif::FD = Returns(true)) where {FB <: Function, FL <: Function, FM <: Function, FR <: Function, FD <: Function}
-    mr = MapReducer(branchfn, leaffn, mergefn, reducefn, descendif, false)
-    mr(path)
-end
+mapreducepath(branchfn::FB, leaffn::FL, mergefn::FM, reducefn::FR, path::Path; descendif::FD = Returns(true), followlinks::Bool = false) where {FB <: Function, FL <: Function, FM <: Function, FR <: Function, FD <: Function} =
+    MapReducer(branchfn, leaffn, mergefn, reducefn, descendif, followlinks)(path)
 
-mapreducepath(branchfn::FB, leaffn::FL, op::FO, path::Path; descendif::FD = Returns(true)) where {FB <: Function, FL <: Function, FO <: Function, FD <: Function} =
-    mapreducepath(branchfn, leaffn, op, op, path; descendif)
+mapreducepath(branchfn::FB, leaffn::FL, op::FO, path::Path; descendif::FD = Returns(true), followlinks::Bool = false) where {FB <: Function, FL <: Function, FO <: Function, FD <: Function} =
+    mapreducepath(branchfn, leaffn, op, Base.Fix1(reduce, op), path; descendif, followlinks)
 
-mapreducepath(nodefn::FN, op::FO, path::Path; descendif::FD = Returns(true)) where {FN <: Function, FO <: Function, FD <: Function} =
-    mapreducepath(nodefn, nodefn, op, path; descendif)
+mapreducepath(nodefn::FN, op::FO, path::Path; descendif::FD = Returns(true), followlinks::Bool = false) where {FN <: Function, FO <: Function, FD <: Function} =
+    mapreducepath(nodefn, nodefn, op, path; descendif, followlinks)
