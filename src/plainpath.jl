@@ -109,6 +109,7 @@ Base.print(io::IO, p::PlainPath) = print(io, String(p))
 Base.broadcastable(p::PlainPath) = Ref(p)
 Base.arg_gen(p::PlainPath) = [String(p)]
 Base.cconvert(::Type{Cstring}, p::PlainPath) = String(p)
+Base.cconvert(::Type{Ptr{UInt8}}, p::PlainPath) = String(p)
 
 # Exceptions
 

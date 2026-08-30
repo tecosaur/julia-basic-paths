@@ -109,6 +109,18 @@ struct MapReducer{BF, LF, MF, RF, DF}
     followlinks::Bool
 end
 
+# `(b, vs) -> reduce(op, vs; init = b)` boxes its kwargs and generator and defeats inference in the recursion
+struct SeededFold{O} <: Function
+    op::O
+end
+
+function (fold::SeededFold)(seed, values)
+    for value in values
+        seed = fold.op(seed, value)
+    end
+    seed
+end
+
 (m::MapReducer)(node) = m(node, children(node))
 
 # REVIEW: thread a per-directory context (branchfn's value) down to leaffn/descendif, for paths, depth, and inherited rules
@@ -179,7 +191,7 @@ mapreducepath(branchfn::FB, leaffn::FL, mergefn::FM, reducefn::FR, path::Path; d
     MapReducer(branchfn, leaffn, mergefn, reducefn, descendif, followlinks)(path)
 
 mapreducepath(branchfn::FB, leaffn::FL, op::FO, path::Path; descendif::FD = Returns(true), followlinks::Bool = false) where {FB <: Function, FL <: Function, FO <: Function, FD <: Function} =
-    mapreducepath(branchfn, leaffn, (b, vs) -> reduce(op, vs; init = b), identity, path; descendif, followlinks)
+    mapreducepath(branchfn, leaffn, SeededFold(op), identity, path; descendif, followlinks)
 
 mapreducepath(nodefn::FN, op::FO, path::Path; descendif::FD = Returns(true), followlinks::Bool = false) where {FN <: Function, FO <: Function, FD <: Function} =
     mapreducepath(nodefn, nodefn, op, path; descendif, followlinks)

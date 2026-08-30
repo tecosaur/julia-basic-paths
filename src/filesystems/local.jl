@@ -72,13 +72,6 @@ end
 
 const LocalRelpath = RelativePath{LocalFileHandle, LocalFilepath}
 
-struct DirEntry <: AbstractResolvable{LocalFileHandle}
-    rel::LocalRelpath
-    type::UInt8
-end
-
-Base.basename(entry::DirEntry) = basename(entry.rel.path)
-
 # Platform-specific implementations of the AbstractFilesystem interface
 @static if Sys.iswindows()
     include("windows.jl")
